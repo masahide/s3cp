@@ -7,7 +7,8 @@ import (
 
 func TestNewS3cp(t *testing.T) {
 	sum := "c59548c3c576228486a1f0037eb16a1b"
-	md5, err := Md5sum("md5_test_file")
+	fi, _ := os.Open("md5_test_file")
+	md5, err := Md5sum(fi)
 
 	if err != nil {
 		t.Error(err)

@@ -28,17 +28,13 @@ func FileSize(file string) (int64, error) {
 
 }
 
-func Md5sum(path string) (string, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return "", err
-	}
+func Md5sum(file *os.File) (string, error) {
 	h := md5.New()
-	_, err = io.Copy(h, f)
+	_, err := io.Copy(h, file)
 	if err != nil {
 		return "", err
 	}
-	f.Close()
+	file.Seek(0, os.SEEK_SET)
 	hex := fmt.Sprintf("%x", h.Sum(nil))
 	return hex, nil
 }
@@ -48,14 +44,6 @@ func ChooseNonEmpty(a string, b string) string {
 		return b
 	}
 	return a
-}
-
-type ListFilesError struct {
-	Path string
-}
-
-func (e *ListFilesError) Error() string {
-	return fmt.Sprintf("%s :symlinkDepth > %d", e.Path, MaxDepth)
 }
 
 func ListFiles(searchPath string, walkFn filepath.WalkFunc, symlinkDepth int) []error {
@@ -99,4 +87,14 @@ func ListFiles(searchPath string, walkFn filepath.WalkFunc, symlinkDepth int) []
 
 func IsSymlink(fileMode os.FileMode) bool {
 	return fileMode&os.ModeSymlink == os.ModeSymlink
+}
+
+//Error
+
+type ListFilesError struct {
+	Path string
+}
+
+func (e *ListFilesError) Error() string {
+	return fmt.Sprintf("%s :symlinkDepth > %d", e.Path, MaxDepth)
 }

@@ -1,10 +1,8 @@
 package lib
 
 import (
-	"bytes"
 	"fmt"
-	"io/ioutil"
-	"path"
+	"os"
 
 	"github.com/crowdmob/goamz/aws"
 	"github.com/crowdmob/goamz/s3"
@@ -19,20 +17,22 @@ var AWSRegions = map[string]aws.Region{
 }
 
 type S3cp struct {
-	Bucket    string
-	Path      string
 	Region    string
-	File      string
+	Bucket    string
+	S3Path    string
+	FilePath  string
 	MimeType  string
 	CheckMD5  bool
 	CheckSize bool
 	client    *s3.S3
+	file      *os.File
+	fileinfo  os.FileInfo
 }
 
 func NewS3cp() *S3cp {
 	s3cp := S3cp{
-		MimeType:  "application/octet-stream",
 		Region:    "ap-northeast-1",
+		MimeType:  "application/octet-stream",
 		CheckMD5:  false,
 		CheckSize: false,
 	}
@@ -52,34 +52,26 @@ func (s3cp *S3cp) Auth() error {
 	return nil
 }
 
-func (s3cp *S3cp) S3Upload() (string, error) {
-
+func (s3cp *S3cp) S3Upload() error {
 	bucket := s3cp.client.Bucket(s3cp.Bucket)
-
-	key := fmt.Sprintf(
-		"%s%s",
-		s3cp.Path,
-		path.Base(s3cp.File),
-	)
-
-	content, _ := ioutil.ReadFile(s3cp.File)
-
-	data := bytes.NewBuffer(content)
-
-	err := bucket.Put(key, data.Bytes(), s3cp.MimeType, s3.Private, s3.Options{})
-
-	if err != nil {
-		return key, err
-	}
-
-	return key, nil
+	//key := fmt.Sprintf( "%s%s", s3cp.S3Path, path.Base(s3cp.FilePath),)
+	return bucket.PutReader(s3cp.S3Path, s3cp.file, s3cp.fileinfo.Size(), s3cp.MimeType, s3.Private, s3.Options{})
 }
 
-func (s3cp *S3cp) FileUpload() (upload bool, key string, err error) {
+func (s3cp *S3cp) FileUpload() (upload bool, err error) {
 	upload = false
-	key, err = s3cp.CompareFile(s3cp.File, s3cp.Path, s3cp.CheckSize, s3cp.CheckMD5)
+	s3cp.file, err = os.Open(s3cp.FilePath)
 	if err != nil {
-		key, err = s3cp.S3Upload()
+		return
+	}
+	defer s3cp.file.Close()
+	s3cp.fileinfo, err = s3cp.file.Stat()
+	if err != nil {
+		return
+	}
+	err = s3cp.CompareFile()
+	if err != nil {
+		err = s3cp.S3Upload()
 		upload = err == nil
 		return
 	}
@@ -87,72 +79,39 @@ func (s3cp *S3cp) FileUpload() (upload bool, key string, err error) {
 
 }
 
-type S3MD5sumIsDifferent struct {
-	Path  string
-	S3md5 string
-	Md5   string
-}
-
-func (e *S3MD5sumIsDifferent) Error() string {
-	return fmt.Sprintf("%s is %s  != %s", e.Path, e.S3md5, e.Md5)
-}
-
-type S3FileSizeIsDifferent struct {
-	Path   string
-	S3Size int64
-	Size   int64
-}
-
-func (e *S3FileSizeIsDifferent) Error() string {
-	return fmt.Sprintf("%s is %d byte != %d byte", e.Path, e.S3Size, e.Size)
-}
-
-type S3NotExistsError struct {
-	Path string
-}
-
-func (e *S3NotExistsError) Error() string {
-	return fmt.Sprintf("%s is not exists", e.Path)
-}
-
-func (s3cp *S3cp) Exists(path string, size int64, md5sum string) (string, error) {
-
+func (s3cp *S3cp) Exists(size int64, md5sum string) error {
 	bucket := s3cp.client.Bucket(s3cp.Bucket)
-	lists, err := bucket.List(path, "/", "", 0)
+	lists, err := bucket.List(s3cp.S3Path, "/", "", 0)
 	if err != nil {
-		return "", err
+		return err
 	}
 	if len(lists.Contents) <= 0 {
-		return "", &S3NotExistsError{path}
+		return &S3NotExistsError{s3cp.S3Path}
 	}
 	if size > 0 && lists.Contents[0].Size != size {
-		return lists.Contents[0].Key, &S3FileSizeIsDifferent{path, lists.Contents[0].Size, size}
+		return &S3FileSizeIsDifferentError{s3cp.S3Path, lists.Contents[0].Size, size}
 	}
 	if md5sum != "" {
 		md5 := `"` + md5sum + `"`
 		if lists.Contents[0].ETag != md5 {
-			return lists.Contents[0].Key, &S3MD5sumIsDifferent{path, lists.Contents[0].ETag, md5}
+			return &S3MD5sumIsDifferentError{s3cp.S3Path, lists.Contents[0].ETag, md5}
 		}
 	}
-	return lists.Contents[0].Key, nil
+	return nil
 }
 
-func (s3cp *S3cp) CompareFile(path string, s3path string, checkSize bool, checkMD5 bool) (string, error) {
+func (s3cp *S3cp) CompareFile() error {
 	md5sum := ""
-	size, err := FileSize(path)
-	if err != nil {
-		return "", err
-	}
-	if !checkSize {
+	var err error
+	size := s3cp.fileinfo.Size()
+	if !s3cp.CheckSize {
 		size = 0
 	}
-	if checkMD5 {
-		md5sum, err = Md5sum(path)
-		if err != nil {
-			return "", err
-		}
+	if s3cp.CheckMD5 {
+		md5sum, err = Md5sum(s3cp.file)
+		return err
 	}
-	return s3cp.Exists(s3path, size, md5sum)
+	return s3cp.Exists(size, md5sum)
 
 }
 
@@ -178,3 +137,32 @@ func (s3cp *S3cp) CompareFile(path string, s3path string, checkSize bool, checkM
 	CommonPrefixes: nil,
 }
 */
+
+// Error
+type S3MD5sumIsDifferentError struct {
+	S3Path string
+	S3md5  string
+	Md5    string
+}
+
+func (e *S3MD5sumIsDifferentError) Error() string {
+	return fmt.Sprintf("%s is %s  != %s", e.S3Path, e.S3md5, e.Md5)
+}
+
+type S3FileSizeIsDifferentError struct {
+	S3Path string
+	S3Size int64
+	Size   int64
+}
+
+func (e *S3FileSizeIsDifferentError) Error() string {
+	return fmt.Sprintf("%s is %d byte != %d byte", e.S3Path, e.S3Size, e.Size)
+}
+
+type S3NotExistsError struct {
+	S3Path string
+}
+
+func (e *S3NotExistsError) Error() string {
+	return fmt.Sprintf("%s is not exists", e.S3Path)
+}
