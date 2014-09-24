@@ -6,6 +6,12 @@ s3cp
 * S3へのrsyncのようにディレクトリ丸ごとアップロードします。
 * アップロードの際、並列で複数のファイルを同時にアップロードすることが可能です。
 
+Download
+--------
+
+https://drone.io/github.com/masahide/s3cp/files
+
+
 注意
 ----
 
@@ -15,10 +21,6 @@ s3cp
 * Windowsはまだ未対応
 
 
-Download
---------
-
-https://drone.io/github.com/masahide/s3cp/files
 
 
 環境変数
