@@ -3,8 +3,16 @@ s3cp
 
 [![Build Status](https://drone.io/github.com/masahide/s3cp/status.png)](https://drone.io/github.com/masahide/s3cp/latest)
 
-* s3へのrsyncのようにディレクトリ丸ごとアップロードします。
+* S3へのrsyncのようにディレクトリ丸ごとアップロードします。
 * アップロードの際、並列で複数のファイルを同時にアップロードすることが可能です。
+
+注意
+----
+
+* S3からのダウンロード機能は未実装です。
+* 単独ファイルのアップロードは出来ません。対象として指定できるのはディレクトリだけです。
+* シンボリックリンクは追跡します。(循環参照を回避するため、symlinkはn階層でストップします)
+* Windowsはまだ未対応
 
 
 Download
