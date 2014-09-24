@@ -109,7 +109,9 @@ func (s3cp *S3cp) CompareFile() error {
 	}
 	if s3cp.CheckMD5 {
 		md5sum, err = Md5sum(s3cp.file)
-		return err
+		if err != nil {
+			return err
+		}
 	}
 	return s3cp.Exists(size, md5sum)
 
