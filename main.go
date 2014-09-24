@@ -14,37 +14,10 @@ import (
 	"github.com/masahide/s3cp/queueworker"
 )
 
-func S3Copy(workerID int, wm queueworker.WorkRequest) error {
-	//time.Sleep(1 * time.Second)
-	//log.Printf("woker:%d, test:%v", workerID, wm)
-	path := wm.Message["path"]
-	root := wm.Message["root"]
-	to := wm.Message["dest"] + `/` + strings.TrimPrefix(strings.TrimPrefix(path, root), `/`)
-	//log.Printf("path:%s", path)
-
-	s3cp := lib.NewS3cp()
-	s3cp.Bucket = bucket
-	s3cp.FilePath = path
-	s3cp.S3Path = to
-	s3cp.CheckSize = checkSize
-	s3cp.CheckMD5 = checkMD5
-	s3cp.Auth()
-	upload, err := s3cp.FileUpload()
-	if err != nil {
-		log.Print(err)
-	}
-	if upload {
-		log.Printf("upload: %s", to)
-	} else {
-		log.Printf("Same file: %s", to)
-	}
-
-	return nil
-}
-
 var checkSize = true
 var checkMD5 = true
 var workNum = 10
+var region = ""
 var bucket = ""
 var cpPath = ""
 var destPath = ""
@@ -53,6 +26,7 @@ func main() {
 	// Parse the command-line flags.
 	flag.BoolVar(&checkSize, "checksize", true, "check size")
 	flag.BoolVar(&checkMD5, "checkmd5", false, "check md5")
+	flag.StringVar(&region, "region", "ap-northeast-1", "region")
 	flag.IntVar(&workNum, "n", 1, "max workers")
 	flag.Parse()
 
@@ -98,4 +72,33 @@ func main() {
 		}
 	}
 
+}
+
+func S3Copy(workerID int, wm queueworker.WorkRequest) error {
+	//time.Sleep(1 * time.Second)
+	//log.Printf("woker:%d, test:%v", workerID, wm)
+	path := wm.Message["path"]
+	root := wm.Message["root"]
+	to := wm.Message["dest"] + `/` + strings.TrimPrefix(strings.TrimPrefix(path, root), `/`)
+	//log.Printf("path:%s", path)
+
+	s3cp := lib.NewS3cp()
+	s3cp.Bucket = bucket
+	s3cp.Region = region
+	s3cp.FilePath = path
+	s3cp.S3Path = to
+	s3cp.CheckSize = checkSize
+	s3cp.CheckMD5 = checkMD5
+	s3cp.Auth()
+	upload, err := s3cp.FileUpload()
+	if err != nil {
+		log.Print(err)
+	}
+	if upload {
+		log.Printf("upload: %s", to)
+	} else {
+		log.Printf("Same file: %s", to)
+	}
+
+	return nil
 }

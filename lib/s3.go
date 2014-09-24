@@ -9,11 +9,15 @@ import (
 )
 
 var AWSRegions = map[string]aws.Region{
-	"ap-northeast-1": aws.APNortheast,
-	"ap-southeast-1": aws.APSoutheast,
-	"ap-southeast-2": aws.APSoutheast2,
-	"eu-west-1":      aws.EUWest,
-	"us-east-1":      aws.USEast,
+	aws.USGovWest.Name:    aws.USGovWest,
+	aws.USEast.Name:       aws.USEast,
+	aws.USWest.Name:       aws.USWest,
+	aws.USWest2.Name:      aws.USWest2,
+	aws.EUWest.Name:       aws.EUWest,
+	aws.APSoutheast.Name:  aws.APSoutheast,
+	aws.APSoutheast2.Name: aws.APSoutheast2,
+	aws.APNortheast.Name:  aws.APNortheast,
+	aws.SAEast.Name:       aws.SAEast,
 }
 
 type S3cp struct {
