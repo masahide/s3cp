@@ -5,8 +5,20 @@ s3cp
 * アップロードの際、並列で複数のファイルを同時にアップロードすることが可能です。
 
 
+
+環境変数
+--------
+
+実行前にAWSのAccess keyとSecret access keyを環境変数にセットする必要があります。
+
+```bash:
+export AWS_ACCESS_KEY_ID="hoge"
+export AWS_SECRET_ACCESS_KEY="fuga"
+````
+
 使い方
 ------
+
 
 s3cp [options] <ローカルのディレクトリパス> <バケット名> <S3のディレクトリパス>
 
