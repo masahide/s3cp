@@ -36,9 +36,9 @@ export AWS_SECRET_ACCESS_KEY="fuga"
 使い方
 ------
 
-
-s3cp [options] <ローカルのディレクトリパス> <バケット名> <S3のディレクトリパス>
-
+```bash:
+$ s3cp [options] <ローカルのディレクトリパス> <バケット名> <S3のディレクトリパス>
+```
 
 * options:
  * -checkmd5=false:
