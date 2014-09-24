@@ -1,9 +1,16 @@
 s3cp
 ====
 
+[![Build Status](https://drone.io/github.com/masahide/s3cp/status.png)](https://drone.io/github.com/masahide/s3cp/latest)
+
 * s3へのrsyncのようにディレクトリ丸ごとアップロードします。
 * アップロードの際、並列で複数のファイルを同時にアップロードすることが可能です。
 
+
+Download
+--------
+
+https://drone.io/github.com/masahide/s3cp/files
 
 
 環境変数
