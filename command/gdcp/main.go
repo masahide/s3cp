@@ -11,7 +11,9 @@ import (
 	"time"
 
 	"code.google.com/p/goauth2/oauth"
+	"code.google.com/p/google-api-go-client/drive/v2"
 
+	"github.com/kr/pretty"
 	"github.com/masahide/s3cp/lib"
 	"github.com/masahide/s3cp/queueworker"
 )
@@ -53,7 +55,7 @@ func main() {
 			ClientId:     config.Installed.ClientID,
 			ClientSecret: config.Installed.ClientSecret,
 			RedirectURL:  fmt.Sprintf("%s:%d", "http://localhost", port),
-			Scope:        "https://www.googleapis.com",
+			Scope:        "https://www.googleapis.com/auth/drive",
 			AuthURL:      config.Installed.AuthURL,
 			TokenURL:     config.Installed.TokenURL,
 			TokenCache:   oauth.CacheFile("cache.json"),
@@ -65,6 +67,11 @@ func main() {
 		log.Fatalf("Error Server: %v", err)
 		return
 	}
+
+	var svc *drive.Service
+	svc, err = drive.New(transport.Client())
+	list, err := AllFiles(svc)
+	pretty.Printf("%# v,\n err:", list, err)
 
 	os.Exit(0)
 
@@ -97,6 +104,29 @@ func main() {
 		}
 	}
 
+}
+
+func AllFiles(d *drive.Service) ([]*drive.File, error) {
+	var fs []*drive.File
+	pageToken := ""
+	for {
+		q := d.Files.List()
+		// If we have a pageToken set, apply it to the query
+		if pageToken != "" {
+			q = q.PageToken(pageToken)
+		}
+		r, err := q.Do()
+		if err != nil {
+			fmt.Printf("An error occurred: %v\n", err)
+			return fs, err
+		}
+		fs = append(fs, r.Items...)
+		pageToken = r.NextPageToken
+		if pageToken == "" {
+			break
+		}
+	}
+	return fs, nil
 }
 
 func S3Copy(workerID int, wm queueworker.WorkRequest) error {

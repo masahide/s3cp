@@ -24,3 +24,4 @@ _testmain.go
 *.prof
 google.json
 s3cp
+cache.json
