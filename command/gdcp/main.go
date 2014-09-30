@@ -115,6 +115,7 @@ func AllFiles(d *drive.Service) ([]*drive.File, error) {
 		if pageToken != "" {
 			q = q.PageToken(pageToken)
 		}
+		q = q.Q("mimeType='application/vnd.google-apps.folder'")
 		r, err := q.Do()
 		if err != nil {
 			fmt.Printf("An error occurred: %v\n", err)
