@@ -22,14 +22,22 @@ var region = ""
 var bucket = ""
 var cpPath = ""
 var destPath = ""
+var show_version = false
+var version string
 
 func main() {
 	// Parse the command-line flags.
+	flag.BoolVar(&show_version, "version", false, "show version")
 	flag.BoolVar(&checkSize, "checksize", true, "check size")
 	flag.BoolVar(&checkMD5, "checkmd5", false, "check md5")
 	flag.StringVar(&region, "region", "ap-northeast-1", "region")
 	flag.IntVar(&workNum, "n", 1, "max workers")
 	flag.Parse()
+
+	if show_version {
+		fmt.Printf("version: %s\n", version)
+		return
+	}
 
 	if flag.NArg() < 3 {
 		fmt.Printf("Usage:\n %s [options] <src local path> <bucket> <s3 path>\n", path.Base(os.Args[0]))
