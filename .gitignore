@@ -22,3 +22,6 @@ _testmain.go
 *.exe
 *.test
 *.prof
+cache.json
+google.json
+s3cp

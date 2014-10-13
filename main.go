@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -8,10 +9,10 @@ import (
 	"path"
 	"runtime"
 	"strings"
-	"time"
+	"sync"
 
 	"github.com/masahide/s3cp/lib"
-	"github.com/masahide/s3cp/queueworker"
+	"github.com/masahide/s3cp/pipelines"
 )
 
 var checkSize = true
@@ -43,62 +44,114 @@ func main() {
 	cpus := runtime.NumCPU()
 	runtime.GOMAXPROCS(cpus)
 
-	qw := queueworker.NewQueueWorker()
-	// Start the dispatcher.
-	//fmt.Println("Starting the dispatcher")
-	qw.StartDispatcher(S3Copy, workNum)
-
 	cpPath = strings.TrimSuffix(cpPath, `/`)
 	destPath = strings.TrimSuffix(destPath, `/`)
 
-	lib.ListFiles(
-		cpPath,
+	done := make(chan struct{})
+	defer close(done)
+	gt := &GenUplaodTask{cpPath, destPath}
+	tasks, errc := pipelines.GenarateTask(done, gt)
+
+	// Start workers
+	c := make(chan pipelines.TaskResult)
+	var wg sync.WaitGroup
+	wg.Add(workNum)
+	for i := 0; i < workNum; i++ {
+		go func() {
+			pipelines.Worker(done, tasks, c)
+			wg.Done()
+		}()
+	}
+
+	// wait work
+	go func() {
+		wg.Wait()
+		close(c)
+	}()
+
+	// Merge resluts
+	for r := range c {
+		log.Printf("%v", r.GetMessage())
+	}
+
+	// Check whether the Walk failed.
+	if err := <-errc; err != nil {
+		log.Printf("%v", err)
+	}
+
+}
+
+type GenUplaodTask struct {
+	cpPath   string
+	destPath string
+}
+
+func (g *GenUplaodTask) MakeTask(done <-chan struct{}, tasks chan<- pipelines.Task) error {
+	errs := lib.ListFiles(
+		g.cpPath,
 		func(path string, info os.FileInfo, err error) error {
 			if err != nil {
 				log.Printf("Error Path:%s, err=[ %s ]", path, err)
 				return err
 			}
-			qw.PostWork(0, info.Name(), map[string]string{"path": path, "root": cpPath, "dest": destPath})
+			select {
+			case tasks <- s3cpTask{path: path, root: g.cpPath, dest: g.destPath}:
+			case <-done:
+				return errors.New("GenarateTask canceled")
+			}
 			return nil
 		},
 		0,
 	)
-
-	for {
-		time.Sleep(10 * time.Millisecond)
-		//log.Printf("CountWorkerQueue cap:%d len:%d, CountWorkQueue cap:%d,len:%d", cap(qw.WorkerQueue), qw.CountWorkerQueue(), cap(qw.WorkQueue), qw.CountWorkQueue())
-		if (qw.CountWorkerQueue() + qw.CountWorkQueue()) == 0 {
-			return
+	if len(errs) > 0 {
+		errmsg := ""
+		for _, err := range errs {
+			errmsg += err.Error() + "\n"
 		}
+		return errors.New(errmsg)
+	} else {
+		return nil
 	}
-
 }
 
-func S3Copy(workerID int, wm queueworker.WorkRequest) error {
-	//time.Sleep(1 * time.Second)
-	//log.Printf("woker:%d, test:%v", workerID, wm)
-	path := wm.Message["path"]
-	root := wm.Message["root"]
-	to := wm.Message["dest"] + `/` + strings.TrimPrefix(strings.TrimPrefix(path, root), `/`)
-	//log.Printf("path:%s", path)
+type s3cpTask struct {
+	path string
+	root string
+	dest string
+}
+
+type s3cpResult struct {
+	task   s3cpTask
+	to     string
+	upload bool
+	err    error
+}
+
+func (r *s3cpResult) Error() string {
+	return r.err.Error()
+}
+func (r *s3cpResult) GetMessage() string {
+	if r.upload {
+		return fmt.Sprintf("upload: %s", r.to)
+	}
+	return fmt.Sprintf("Same file: %s", r.to)
+}
+
+func (t s3cpTask) Work() pipelines.TaskResult {
+	to := t.dest + `/` + strings.TrimPrefix(strings.TrimPrefix(t.path, t.root), `/`)
+	//log.Printf("t.path:%s", t.path)
+	result := s3cpResult{task: t}
 
 	s3cp := lib.NewS3cp()
 	s3cp.Bucket = bucket
 	s3cp.Region = region
-	s3cp.FilePath = path
+	s3cp.FilePath = t.path
 	s3cp.S3Path = to
 	s3cp.CheckSize = checkSize
 	s3cp.CheckMD5 = checkMD5
 	s3cp.Auth()
-	upload, err := s3cp.FileUpload()
-	if err != nil {
-		log.Print(err)
-	}
-	if upload {
-		log.Printf("upload: %s", to)
-	} else {
-		log.Printf("Same file: %s", to)
-	}
+	result.to = to
+	result.upload, result.err = s3cp.FileUpload()
 
-	return nil
+	return &result
 }
