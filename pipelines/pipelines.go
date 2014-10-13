@@ -13,7 +13,7 @@ type GenTask interface {
 	MakeTask(<-chan struct{}, chan<- Task) error
 }
 
-func GenarateTask(done <-chan struct{}, gt GenTask) (<-chan Task, <-chan error) {
+func GenerateTask(done <-chan struct{}, gt GenTask) (<-chan Task, <-chan error) {
 	tasks := make(chan Task)
 	errc := make(chan error, 1)
 	go func() {
@@ -48,7 +48,7 @@ func ParallelWork(parallel int) error {
 	defer close(done)
 
 	gt := &GenUplaodTask{root}
-	tasks, errc := GenarateTask(done, gt)
+	tasks, errc := GenerateTask(done, gt)
 
 	// Start workers
 	c := make(chan TaskResult)
@@ -106,7 +106,7 @@ func (p PathTask) Work() TaskResult {
 	return result
 }
 
-//Example GenarateTask
+//Example GenerateTask
 type GenUplaodTask struct {
 	path string
 }
@@ -123,36 +123,9 @@ func (gut *GenUplaodTask) MakeTask(done <-chan struct{}, tasks chan<- Task) erro
 		select {
 		case tasks <- PathTask{path: path}:
 		case <-done:
-			return errors.New("GenarateTask canceled")
+			return errors.New("Generate Task canceled")
 		}
 		return nil
 	})
-}
-*/
-/*
-//Example genelate tasks
-func aGenarateTask(done <-chan struct{}, root string) (<-chan Task, <-chan error) {
-	tasks := make(chan Task)
-	errc := make(chan error, 1)
-	go func() {
-		// Close the paths channel after Walk returns.
-		defer close(tasks)
-		// No select needed for this send, since errc is buffered.
-		errc <- filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
-			if err != nil {
-				return err
-			}
-			if info.IsDir() {
-				return nil
-			}
-			select {
-			case tasks <- PathTask{path: path}:
-			case <-done:
-				return errors.New("GenarateTask canceled")
-			}
-			return nil
-		})
-	}()
-	return tasks, errc
 }
 */

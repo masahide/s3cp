@@ -47,18 +47,19 @@ func main() {
 	cpPath = strings.TrimSuffix(cpPath, `/`)
 	destPath = strings.TrimSuffix(destPath, `/`)
 
+	// Generate Task
 	done := make(chan struct{})
 	defer close(done)
 	gt := &GenUplaodTask{cpPath, destPath}
-	tasks, errc := pipelines.GenarateTask(done, gt)
+	tasks, errc := pipelines.GenerateTask(done, gt)
 
 	// Start workers
-	c := make(chan pipelines.TaskResult)
+	results := make(chan pipelines.TaskResult)
 	var wg sync.WaitGroup
 	wg.Add(workNum)
 	for i := 0; i < workNum; i++ {
 		go func() {
-			pipelines.Worker(done, tasks, c)
+			pipelines.Worker(done, tasks, results)
 			wg.Done()
 		}()
 	}
@@ -66,17 +67,17 @@ func main() {
 	// wait work
 	go func() {
 		wg.Wait()
-		close(c)
+		close(results)
 	}()
 
-	// Merge resluts
-	for r := range c {
-		log.Printf("%v", r.GetMessage())
+	// Merge results
+	for result := range results {
+		log.Printf("%v", result.GetMessage())
 	}
 
-	// Check whether the Walk failed.
+	// Check whether the work failed.
 	if err := <-errc; err != nil {
-		log.Printf("%v", err)
+		log.Printf("Error: %v", err)
 	}
 
 }
@@ -97,7 +98,7 @@ func (g *GenUplaodTask) MakeTask(done <-chan struct{}, tasks chan<- pipelines.Ta
 			select {
 			case tasks <- s3cpTask{path: path, root: g.cpPath, dest: g.destPath}:
 			case <-done:
-				return errors.New("GenarateTask canceled")
+				return errors.New("Generate Task canceled")
 			}
 			return nil
 		},
