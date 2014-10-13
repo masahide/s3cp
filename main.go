@@ -50,7 +50,7 @@ func main() {
 	// Generate Task
 	done := make(chan struct{})
 	defer close(done)
-	gt := &GenUplaodTask{cpPath, destPath}
+	gt := &GenUploadTask{cpPath, destPath}
 	tasks, errc := pipelines.GenerateTask(done, gt)
 
 	// Start workers
@@ -82,12 +82,12 @@ func main() {
 
 }
 
-type GenUplaodTask struct {
+type GenUploadTask struct {
 	cpPath   string
 	destPath string
 }
 
-func (g *GenUplaodTask) MakeTask(done <-chan struct{}, tasks chan<- pipelines.Task) error {
+func (g *GenUploadTask) MakeTask(done <-chan struct{}, tasks chan<- pipelines.Task) error {
 	errs := lib.ListFiles(
 		g.cpPath,
 		func(path string, info os.FileInfo, err error) error {
