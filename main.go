@@ -4,7 +4,6 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"log"
 	"os"
 	"path"
 	"runtime"
@@ -16,76 +15,105 @@ import (
 )
 
 var checkSize = true
-var checkMD5 = true
-var workNum = 10
-var region = ""
+var checkMD5 = false
+var workNum = 1
+var region = "ap-northeast-1"
 var bucket = ""
 var cpPath = ""
 var destPath = ""
-var show_version = false
+var dirCopy = false
+var logLevel = 0
+var showVersion = false
 var version string
 
 func main() {
 	// Parse the command-line flags.
-	flag.BoolVar(&show_version, "version", false, "show version")
-	flag.BoolVar(&checkSize, "checksize", true, "check size")
-	flag.BoolVar(&checkMD5, "checkmd5", false, "check md5")
-	flag.StringVar(&region, "region", "ap-northeast-1", "region")
-	flag.IntVar(&workNum, "n", 1, "max workers")
+	flag.BoolVar(&showVersion, "version", showVersion, "show version")
+	flag.BoolVar(&dirCopy, "r", dirCopy, "directory copy mode")
+	flag.BoolVar(&checkSize, "checksize", checkSize, "check size")
+	flag.BoolVar(&checkMD5, "checkmd5", checkMD5, "check md5")
+	flag.StringVar(&region, "region", region, "region")
+	flag.IntVar(&workNum, "n", workNum, "max workers")
+	flag.IntVar(&logLevel, "d", logLevel, "log level")
 	flag.Parse()
 
-	if show_version {
+	if showVersion {
 		fmt.Printf("version: %s\n", version)
 		return
 	}
 
 	if flag.NArg() < 3 {
-		fmt.Printf("Usage:\n %s [options] <src local path> <bucket> <s3 path>\n", path.Base(os.Args[0]))
+		fmt.Printf("Usage:\n")
+		fmt.Printf(" %s [options] <src path/to/filename> <bucket> <s3 path/to/filename>\n", path.Base(os.Args[0]))
+		fmt.Printf(" %s -r [options] <src local dir path> <bucket> <s3 path>\n", path.Base(os.Args[0]))
+		fmt.Printf("Options:\n")
 		flag.PrintDefaults()
 		os.Exit(1)
 	}
 	cpPath = flag.Args()[0]
 	bucket = flag.Args()[1]
 	destPath = flag.Args()[2]
-	fmt.Printf("copy %s -> %s:%s\n", cpPath, bucket, destPath)
+	Log := lib.NewLoogerLevel(logLevel)
+	Log.Notice("copy %s -> %s:%s", cpPath, bucket, destPath)
 
 	cpus := runtime.NumCPU()
 	runtime.GOMAXPROCS(cpus)
 
-	cpPath = strings.TrimSuffix(cpPath, `/`)
-	destPath = strings.TrimSuffix(destPath, `/`)
+	if dirCopy {
+		cpPath = strings.TrimSuffix(cpPath, `/`)
+		destPath = strings.TrimSuffix(destPath, `/`)
 
-	// Generate Task
-	done := make(chan struct{})
-	defer close(done)
-	gt := &GenUploadTask{cpPath, destPath}
-	tasks, errc := pipelines.GenerateTask(done, gt)
+		// Generate Task
+		done := make(chan struct{})
+		defer close(done)
+		gt := &GenUploadTask{cpPath, destPath, Log}
+		tasks, errc := pipelines.GenerateTask(done, gt)
 
-	// Start workers
-	results := make(chan pipelines.TaskResult)
-	var wg sync.WaitGroup
-	wg.Add(workNum)
-	for i := 0; i < workNum; i++ {
+		// Start workers
+		results := make(chan pipelines.TaskResult)
+		var wg sync.WaitGroup
+		wg.Add(workNum)
+		for i := 0; i < workNum; i++ {
+			go func() {
+				pipelines.Worker(done, tasks, results)
+				wg.Done()
+			}()
+		}
+
+		// wait work
 		go func() {
-			pipelines.Worker(done, tasks, results)
-			wg.Done()
+			wg.Wait()
+			close(results)
 		}()
-	}
 
-	// wait work
-	go func() {
-		wg.Wait()
-		close(results)
-	}()
+		// Merge results
+		for result := range results {
+			Log.Info("%v", result.GetMessage())
+		}
 
-	// Merge results
-	for result := range results {
-		log.Printf("%v", result.GetMessage())
-	}
-
-	// Check whether the work failed.
-	if err := <-errc; err != nil {
-		log.Printf("Error: %v", err)
+		// Check whether the work failed.
+		if err := <-errc; err != nil {
+			Log.Error("Error: %v", err)
+			os.Exit(1)
+		}
+	} else {
+		var err error
+		s3cp := lib.NewS3cp()
+		s3cp.Log = Log
+		s3cp.Region = region
+		s3cp.Bucket = bucket
+		s3cp.S3Path = destPath
+		if strings.HasSuffix(destPath, "/") {
+			s3cp.S3Path = destPath + path.Base(cpPath)
+		}
+		s3cp.FilePath = cpPath
+		s3cp.Auth()
+		parts, err := s3cp.S3ParallelMultipartUpload(workNum)
+		Log.Debug("parts:%#v\n", parts, err)
+		if err != nil {
+			Log.Error("err:%#v\n", err)
+			os.Exit(1)
+		}
 	}
 
 }
@@ -93,6 +121,7 @@ func main() {
 type GenUploadTask struct {
 	cpPath   string
 	destPath string
+	Log      *lib.Logger
 }
 
 func (g *GenUploadTask) MakeTask(done <-chan struct{}, tasks chan<- pipelines.Task) error {
@@ -100,7 +129,7 @@ func (g *GenUploadTask) MakeTask(done <-chan struct{}, tasks chan<- pipelines.Ta
 		g.cpPath,
 		func(path string, info os.FileInfo, err error) error {
 			if err != nil {
-				log.Printf("Error Path:%s, err=[ %s ]", path, err)
+				g.Log.Error("Error Path:%s, err=[ %s ]", path, err)
 				return err
 			}
 			select {

@@ -438,9 +438,13 @@ func (s3cp *S3cp) S3MultipartUpload() (map[int]s3.Part, error) {
 	return parts, err
 }
 func (s3cp *S3cp) S3ParallelMultipartUpload(parallel int) (map[int]s3.Part, error) {
-	bucket := s3cp.client.Bucket(s3cp.Bucket)
-	//key := fmt.Sprintf( "%s%s", s3cp.S3Path, path.Base(s3cp.FilePath),)
 	var err error
+	bucket := s3cp.client.Bucket(s3cp.Bucket)
+	s3cp.file, err = os.Open(s3cp.FilePath)
+	if err != nil {
+		return nil, err
+	}
+	//key := fmt.Sprintf( "%s%s", s3cp.S3Path, path.Base(s3cp.FilePath),)
 	err = backoff.Retry(func() error {
 		s3cp.multi, err = bucket.Multi(s3cp.S3Path, s3cp.MimeType, s3.Private, s3.Options{})
 		return err
