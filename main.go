@@ -4,95 +4,166 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"log"
 	"os"
 	"path"
 	"runtime"
 	"strings"
 	"sync"
+	"time"
 
+	"github.com/cenkalti/backoff"
 	"github.com/masahide/s3cp/lib"
 	"github.com/masahide/s3cp/pipelines"
 )
 
-var checkSize = true
-var checkMD5 = true
-var workNum = 10
-var region = ""
-var bucket = ""
-var cpPath = ""
-var destPath = ""
-var show_version = false
-var version string
+var (
+	checkSize                = true
+	checkMD5                 = false
+	workNum                  = 1
+	region                   = "ap-northeast-1"
+	bucket                   = ""
+	cpPath                   = ""
+	destPath                 = ""
+	dirCopy                  = false
+	logLevel                 = 0
+	jsonLog                  = false
+	showVersion              = false
+	RetryInitialInterval     = 500 //500 * time.Millisecond
+	RetryRandomizationFactor = 0.5 //0.5
+	RetryMultiplier          = 1.5 //1.5
+	RetryMaxInterval         = 60  //60 * time.Second
+	RetryMaxElapsedTime      = 15  //15 * time.Minute
+	version                  string
+	BackoffParam             *backoff.ExponentialBackOff
+	Log                      *lib.Logger
+)
 
 func main() {
 	// Parse the command-line flags.
-	flag.BoolVar(&show_version, "version", false, "show version")
-	flag.BoolVar(&checkSize, "checksize", true, "check size")
-	flag.BoolVar(&checkMD5, "checkmd5", false, "check md5")
-	flag.StringVar(&region, "region", "ap-northeast-1", "region")
-	flag.IntVar(&workNum, "n", 1, "max workers")
+	flag.BoolVar(&showVersion, "version", showVersion, "show version")
+	flag.BoolVar(&dirCopy, "r", dirCopy, "directory copy mode")
+	flag.BoolVar(&checkSize, "checksize", checkSize, "check size")
+	flag.BoolVar(&checkMD5, "checkmd5", checkMD5, "check md5")
+	flag.BoolVar(&jsonLog, "jsonLog", jsonLog, "JSON output")
+	flag.StringVar(&region, "region", region, "region")
+	flag.IntVar(&workNum, "n", workNum, "max workers")
+	flag.IntVar(&RetryInitialInterval, "RetryInitialInterval", RetryInitialInterval, "Retry Initial Interval")
+	flag.Float64Var(&RetryRandomizationFactor, "RetryRandomizationFactor", RetryRandomizationFactor, "Retry Randomization Factor")
+	flag.Float64Var(&RetryMultiplier, "RetryMultiplier", RetryMultiplier, "Retry Multiplier")
+	flag.IntVar(&RetryMaxInterval, "RetryMaxInterval", RetryMaxInterval, "Retry Max Interval")
+	flag.IntVar(&RetryMaxElapsedTime, "RetryMaxElapsedTime", RetryMaxElapsedTime, "Retry Max Elapsed Time")
+
+	flag.IntVar(&logLevel, "d", logLevel, "log level")
+
 	flag.Parse()
 
-	if show_version {
+	if showVersion {
 		fmt.Printf("version: %s\n", version)
 		return
 	}
 
 	if flag.NArg() < 3 {
-		fmt.Printf("Usage:\n %s [options] <src local path> <bucket> <s3 path>\n", path.Base(os.Args[0]))
+		fmt.Printf("Usage:\n")
+		fmt.Printf(" %s [options] <src path/to/filename> <bucket> <s3 path/to/filename>\n", path.Base(os.Args[0]))
+		fmt.Printf(" %s -r [options] <src local dir path> <bucket> <s3 path>\n", path.Base(os.Args[0]))
+		fmt.Printf("Options:\n")
 		flag.PrintDefaults()
 		os.Exit(1)
 	}
 	cpPath = flag.Args()[0]
 	bucket = flag.Args()[1]
 	destPath = flag.Args()[2]
-	fmt.Printf("copy %s -> %s:%s\n", cpPath, bucket, destPath)
+
+	BackoffParam = backoff.NewExponentialBackOff()
+	BackoffParam.InitialInterval = time.Duration(RetryInitialInterval) * time.Millisecond
+	BackoffParam.RandomizationFactor = RetryRandomizationFactor
+	BackoffParam.Multiplier = RetryMultiplier
+	BackoffParam.MaxInterval = time.Duration(RetryMaxInterval) * time.Second
+	BackoffParam.MaxElapsedTime = time.Duration(RetryMaxElapsedTime) * time.Minute
+
+	if jsonLog {
+		Log = lib.NewBufLoogerLevel(logLevel)
+	} else {
+		Log = lib.NewLoogerLevel(logLevel)
+	}
+	Log.Notice("copy %s -> %s:%s", cpPath, bucket, destPath)
 
 	cpus := runtime.NumCPU()
 	runtime.GOMAXPROCS(cpus)
 
-	cpPath = strings.TrimSuffix(cpPath, `/`)
-	destPath = strings.TrimSuffix(destPath, `/`)
+	var err error
+	if dirCopy {
+		cpPath = strings.TrimSuffix(cpPath, `/`)
+		destPath = strings.TrimSuffix(destPath, `/`)
 
-	// Generate Task
-	done := make(chan struct{})
-	defer close(done)
-	gt := &GenUploadTask{cpPath, destPath}
-	tasks, errc := pipelines.GenerateTask(done, gt)
+		// Generate Task
+		done := make(chan struct{})
+		defer close(done)
+		gt := &GenUploadTask{cpPath, destPath, Log}
+		tasks, errc := pipelines.GenerateTask(done, gt)
 
-	// Start workers
-	results := make(chan pipelines.TaskResult)
-	var wg sync.WaitGroup
-	wg.Add(workNum)
-	for i := 0; i < workNum; i++ {
+		// Start workers
+		results := make(chan pipelines.TaskResult)
+		var wg sync.WaitGroup
+		wg.Add(workNum)
+		for i := 0; i < workNum; i++ {
+			go func() {
+				pipelines.Worker(done, tasks, results)
+				wg.Done()
+			}()
+		}
+
+		// wait work
 		go func() {
-			pipelines.Worker(done, tasks, results)
-			wg.Done()
+			wg.Wait()
+			close(results)
 		}()
-	}
 
-	// wait work
-	go func() {
-		wg.Wait()
-		close(results)
-	}()
+		// Merge results
+		for result := range results {
+			Log.Info("%v", result.GetMessage())
+		}
 
-	// Merge results
-	for result := range results {
-		log.Printf("%v", result.GetMessage())
+		// Check whether the work failed.
+		if err = <-errc; err != nil {
+			Log.Error("Error: %v", err)
+		}
+	} else {
+		s3cp := lib.NewS3cp()
+		s3cp.Log = Log
+		s3cp.BackoffParam = BackoffParam
+		s3cp.Region = region
+		s3cp.Bucket = bucket
+		s3cp.S3Path = destPath
+		s3cp.CheckSize = checkSize
+		//s3cp.CheckMD5 = checkMD5
+		s3cp.WorkNum = workNum
+		if strings.HasSuffix(destPath, "/") {
+			s3cp.S3Path = destPath + path.Base(cpPath)
+		}
+		s3cp.FilePath = cpPath
+		s3cp.Auth()
+		var upload bool
+		upload, err = s3cp.FileUpload()
+		if upload {
+			Log.Info("Same file: %s", destPath)
+		}
 	}
-
-	// Check whether the work failed.
-	if err := <-errc; err != nil {
-		log.Printf("Error: %v", err)
+	returnCode := 0
+	if err != nil {
+		returnCode = 1
 	}
+	if jsonLog {
+		os.Stdout.Write(Log.LogBufToJson(returnCode))
+	}
+	os.Exit(returnCode)
 
 }
 
 type GenUploadTask struct {
 	cpPath   string
 	destPath string
+	Log      *lib.Logger
 }
 
 func (g *GenUploadTask) MakeTask(done <-chan struct{}, tasks chan<- pipelines.Task) error {
@@ -100,7 +171,7 @@ func (g *GenUploadTask) MakeTask(done <-chan struct{}, tasks chan<- pipelines.Ta
 		g.cpPath,
 		func(path string, info os.FileInfo, err error) error {
 			if err != nil {
-				log.Printf("Error Path:%s, err=[ %s ]", path, err)
+				g.Log.Error("Error Path:%s, err=[ %s ]", path, err)
 				return err
 			}
 			select {
@@ -152,12 +223,15 @@ func (t s3cpTask) Work() pipelines.TaskResult {
 	result := s3cpResult{task: t}
 
 	s3cp := lib.NewS3cp()
+	s3cp.BackoffParam = BackoffParam
 	s3cp.Bucket = bucket
 	s3cp.Region = region
 	s3cp.FilePath = t.path
+	s3cp.Log = Log
 	s3cp.S3Path = to
 	s3cp.CheckSize = checkSize
 	s3cp.CheckMD5 = checkMD5
+	s3cp.WorkNum = workNum
 	s3cp.Auth()
 	result.to = to
 	result.upload, result.err = s3cp.FileUpload()
