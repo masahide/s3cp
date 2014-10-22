@@ -43,6 +43,8 @@ $ s3cp [options] <ローカルのディレクトリパス> <バケット名> <S3
 ```
 
 * options:
+ *  -r
+   *  ディレクトリコピーモード
  * -checkmd5=false:
    * 同名のファイルが既に存在する場合にMD5sumを検証し、異なる場合のみ上書
  * -checksize=true:
@@ -51,4 +53,14 @@ $ s3cp [options] <ローカルのディレクトリパス> <バケット名> <S3
    * 並列アップロードする数(デフォルト:1)
  * -region=ap-northeast-1:
    * 対象リージョンの指定
+ *  -jsonLog
+   * 出力形式をjsonに
+ *  -version
+   * versionの表示
+ *  -RetryInitialInterval=500: Retry Initial Interval
+ *  -RetryMaxElapsedTime=15: Retry Max Elapsed Time
+ *  -RetryMaxInterval=60: Retry Max Interval
+ *  -RetryMultiplier=1.5: Retry Multiplier
+ *  -RetryRandomizationFactor=0.5: Retry Randomization Factor
+ *  -d=0: log level
 
