@@ -41,6 +41,7 @@ type S3cp struct {
 	file         *os.File
 	fileinfo     os.FileInfo
 	BackoffParam *backoff.ExponentialBackOff
+	WorkNum      int
 }
 
 func NewS3cp() *S3cp {
@@ -49,7 +50,7 @@ func NewS3cp() *S3cp {
 		MimeType:  "application/octet-stream",
 		CheckMD5:  false,
 		CheckSize: false,
-		PartSize:  100 * 1024 * 1024,
+		PartSize:  20 * 1024 * 1024,
 		Log:       NewLooger(),
 	}
 	/*
@@ -92,14 +93,26 @@ func (s3cp *S3cp) FileUpload() (upload bool, err error) {
 	if err != nil {
 		return
 	}
+
 	err = s3cp.CompareFile()
-	if err != nil {
-		err = s3cp.S3Upload()
-		upload = err == nil
+	if err == nil {
+		upload = false
 		return
 	}
+	if size, _ := FileSize(s3cp.FilePath); size > s3cp.PartSize {
+		// multipart upload
+		var parts map[int]s3.Part
+		s3cp.Log.Debug("start Multipart Upload:%v", s3cp.FilePath)
+		parts, err = s3cp.S3ParallelMultipartUpload(s3cp.WorkNum)
+		s3cp.Log.Debug("parts:%v\n", parts, err)
+	} else {
+		err = s3cp.S3Upload()
+	}
+	if err != nil {
+		s3cp.Log.Error("err:%#v\n", err)
+	}
+	upload = err == nil
 	return
-
 }
 
 func (s3cp *S3cp) Exists(size int64, md5sum string) error {
