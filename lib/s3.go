@@ -27,19 +27,20 @@ var AWSRegions = map[string]aws.Region{
 }
 
 type S3cp struct {
-	Region    string
-	Bucket    string
-	S3Path    string
-	FilePath  string
-	MimeType  string
-	PartSize  int64
-	CheckMD5  bool
-	CheckSize bool
-	Log       *Logger
-	multi     *s3.Multi
-	client    *s3.S3
-	file      *os.File
-	fileinfo  os.FileInfo
+	Region       string
+	Bucket       string
+	S3Path       string
+	FilePath     string
+	MimeType     string
+	PartSize     int64
+	CheckMD5     bool
+	CheckSize    bool
+	Log          *Logger
+	multi        *s3.Multi
+	client       *s3.S3
+	file         *os.File
+	fileinfo     os.FileInfo
+	BackoffParam *backoff.ExponentialBackOff
 }
 
 func NewS3cp() *S3cp {
@@ -70,9 +71,14 @@ func (s3cp *S3cp) Auth() error {
 func (s3cp *S3cp) S3Upload() error {
 	bucket := s3cp.client.Bucket(s3cp.Bucket)
 	//key := fmt.Sprintf( "%s%s", s3cp.S3Path, path.Base(s3cp.FilePath),)
-	return backoff.Retry(func() error {
+	backoffParam := *s3cp.BackoffParam
+	err := backoff.Retry(func() error {
 		return bucket.PutReader(s3cp.S3Path, s3cp.file, s3cp.fileinfo.Size(), s3cp.MimeType, s3.Private, s3.Options{})
-	}, backoff.NewExponentialBackOff())
+	}, &backoffParam)
+	if err != nil {
+		s3cp.Log.Warning("bucket.PutReader Giveup Exponential Backoff - Max ElapsedTime:%v err:%v", backoffParam.MaxElapsedTime, err)
+	}
+	return err
 }
 
 func (s3cp *S3cp) FileUpload() (upload bool, err error) {
@@ -100,11 +106,16 @@ func (s3cp *S3cp) Exists(size int64, md5sum string) error {
 	bucket := s3cp.client.Bucket(s3cp.Bucket)
 	var lists *s3.ListResp
 	var err error
+	backoffParam := *s3cp.BackoffParam
 	err = backoff.Retry(func() error {
 		lists, err = bucket.List(s3cp.S3Path, "/", "", 0)
+		if err != nil {
+			s3cp.Log.Warning("bucket.List err:%v", err)
+		}
 		return err
-	}, backoff.NewExponentialBackOff())
+	}, &backoffParam)
 	if err != nil {
+		s3cp.Log.Warning("bucket.List Giveup Exponential Backoff - Max ElapsedTime:%v", backoffParam.MaxElapsedTime)
 		return err
 	}
 	if len(lists.Contents) <= 0 {
@@ -239,16 +250,21 @@ func (s3cp *S3cp) PutWorker(done chan struct{}, queue <-chan putWork, r chan<- r
 				res.part = w.oldpart
 			} else {
 				// Part wasn't found or doesn't match. Send it.
-				s3cp.Log.Info("Start upload Part section: %v", w.section)
+				s3cp.Log.Info("Start upload Part section Num:%v", w.current)
+				backoffParam := *s3cp.BackoffParam
 				err = backoff.Retry(func() error {
 					res.part, err = s3cp.multi.PutPart(w.current, w.section)
+					if err != nil {
+						s3cp.Log.Warning("PutPart err:%v", err)
+						res.err = err
+					}
 					return err
-				}, backoff.NewExponentialBackOff())
+				}, &backoffParam)
 				if err != nil {
-					s3cp.Log.Warning("PutPart err:%v", err)
+					s3cp.Log.Warning("PutPart Giveup Exponential Backoff - Max ElapsedTime:%v", backoffParam.MaxElapsedTime)
 					res.err = err
 				} else {
-					s3cp.Log.Info("uploaded Part section: %v , part: %# v", w.section, res.part)
+					s3cp.Log.Info("uploaded Part section Num:%v", res.part.N)
 				}
 			}
 		}
@@ -265,15 +281,16 @@ func (s3cp *S3cp) PutWorker(done chan struct{}, queue <-chan putWork, r chan<- r
 func (s3cp *S3cp) PutAll(r s3.ReaderAtSeeker, partSize int64) (map[int]s3.Part, error) {
 	var err error
 	var old []s3.Part
+	backoffParam := *s3cp.BackoffParam
 	err = backoff.Retry(func() error {
 		old, err = s3cp.multi.ListParts()
 		if err != nil && hasCode(err, "NoSuchUpload") {
 			return nil
 		}
 		return err
-	}, backoff.NewExponentialBackOff())
+	}, &backoffParam)
 	if err != nil {
-		s3cp.Log.Warning("ListParts err:%v", err)
+		s3cp.Log.Warning("Multi.ListParts Giveup Exponential Backoff - Max ElapsedTime:%v err:%v", backoffParam.MaxElapsedTime, err)
 		return nil, err
 	}
 	oldpart := map[int]s3.Part{}
@@ -312,15 +329,16 @@ NextSection:
 		// Part wasn't found or doesn't match. Send it.
 		var part s3.Part
 		s3cp.Log.Info("Start upload Part section: %v", section)
+		backoffParam := *s3cp.BackoffParam
 		err = backoff.Retry(func() error {
 			part, err = s3cp.multi.PutPart(current, section)
 			return err
-		}, backoff.NewExponentialBackOff())
+		}, &backoffParam)
 		if err != nil {
-			s3cp.Log.Warning("PutPart err:%v", err)
+			s3cp.Log.Warning("PutPart Giveup Exponential Backoff - Max ElapsedTime:%v err:%v", backoffParam.MaxElapsedTime, err)
 			return nil, err
 		}
-		s3cp.Log.Debug("uploaded Part section: %v , part: %# v", section, part)
+		s3cp.Log.Debug("uploaded Part section: %v , part: %v", section, part)
 		result[part.N] = part
 		current++
 	}
@@ -330,15 +348,16 @@ NextSection:
 func (s3cp *S3cp) ParallelPutAll(r s3.ReaderAtSeeker, partSize int64, parallel int) (map[int]s3.Part, error) {
 	var err error
 	var old []s3.Part
+	backoffParam := *s3cp.BackoffParam
 	err = backoff.Retry(func() error {
 		old, err = s3cp.multi.ListParts()
 		if err != nil && hasCode(err, "NoSuchUpload") {
 			return nil
 		}
 		return err
-	}, backoff.NewExponentialBackOff())
+	}, &backoffParam)
 	if err != nil {
-		s3cp.Log.Warning("ListParts err:%v", err)
+		s3cp.Log.Warning("multi.ListParts Giveup Exponential Backoff - Max ElapsedTime:%v err:%v", backoffParam.MaxElapsedTime, err)
 		return nil, err
 	}
 	oldpart := map[int]s3.Part{}
@@ -408,11 +427,13 @@ func (s3cp *S3cp) S3MultipartUpload() (map[int]s3.Part, error) {
 	bucket := s3cp.client.Bucket(s3cp.Bucket)
 	//key := fmt.Sprintf( "%s%s", s3cp.S3Path, path.Base(s3cp.FilePath),)
 	var err error
+	backoffParam := *s3cp.BackoffParam
 	err = backoff.Retry(func() error {
 		s3cp.multi, err = bucket.Multi(s3cp.S3Path, s3cp.MimeType, s3.Private, s3.Options{})
 		return err
-	}, backoff.NewExponentialBackOff())
+	}, &backoffParam)
 	if err != nil {
+		s3cp.Log.Warning("multi.ListParts Giveup Exponential Backoff - Max ElapsedTime:%v err:%v", backoffParam.MaxElapsedTime, err)
 		return nil, err
 	}
 
@@ -420,7 +441,7 @@ func (s3cp *S3cp) S3MultipartUpload() (map[int]s3.Part, error) {
 	if err != nil {
 		return nil, err
 	}
-	s3cp.Log.Debug("uploaded all Parts %# v", parts)
+	s3cp.Log.Debug("uploaded all Parts. len(parts)=%v", len(parts))
 
 	partsArray := make([]s3.Part, len(parts))
 	for _, p := range parts {
@@ -429,12 +450,18 @@ func (s3cp *S3cp) S3MultipartUpload() (map[int]s3.Part, error) {
 		}
 		partsArray[p.N-1] = p
 	}
+	backoffParam = *s3cp.BackoffParam
 	err = backoff.Retry(func() error {
-		s3cp.Log.Debug("Start  complate Parts %# v", partsArray)
+		s3cp.Log.Debug("Start  multi.complate.  len(PartsArray)=%v", len(partsArray))
 		err = s3cp.multi.Complete(partsArray)
-		s3cp.Log.Warning("complate err: %# v", err)
+		if err != nil {
+			s3cp.Log.Error("complate err: %v", err)
+		}
 		return err
-	}, backoff.NewExponentialBackOff())
+	}, &backoffParam)
+	if err != nil {
+		s3cp.Log.Warning("multi.Complete Giveup Exponential Backoff - Max ElapsedTime:%v err:%v", backoffParam.MaxElapsedTime, err)
+	}
 	return parts, err
 }
 func (s3cp *S3cp) S3ParallelMultipartUpload(parallel int) (map[int]s3.Part, error) {
@@ -445,11 +472,16 @@ func (s3cp *S3cp) S3ParallelMultipartUpload(parallel int) (map[int]s3.Part, erro
 		return nil, err
 	}
 	//key := fmt.Sprintf( "%s%s", s3cp.S3Path, path.Base(s3cp.FilePath),)
+	backoffParam := *s3cp.BackoffParam
 	err = backoff.Retry(func() error {
 		s3cp.multi, err = bucket.Multi(s3cp.S3Path, s3cp.MimeType, s3.Private, s3.Options{})
+		if err != nil {
+			s3cp.Log.Warning("bucket.Multi err: %v", err)
+		}
 		return err
-	}, backoff.NewExponentialBackOff())
+	}, &backoffParam)
 	if err != nil {
+		s3cp.Log.Warning("bucket.Multi Giveup Exponential Backoff - Max ElapsedTime:%v err:%v", backoffParam.MaxElapsedTime)
 		return nil, err
 	}
 
@@ -457,7 +489,7 @@ func (s3cp *S3cp) S3ParallelMultipartUpload(parallel int) (map[int]s3.Part, erro
 	if err != nil {
 		return nil, err
 	}
-	s3cp.Log.Debug("uploaded all Parts %# v", parts)
+	s3cp.Log.Debug("uploaded all Parts. len(parts)=%v", len(parts))
 
 	partsArray := make([]s3.Part, len(parts))
 	for _, p := range parts {
@@ -466,11 +498,17 @@ func (s3cp *S3cp) S3ParallelMultipartUpload(parallel int) (map[int]s3.Part, erro
 		}
 		partsArray[p.N-1] = p
 	}
+	backoffParam = *s3cp.BackoffParam
 	err = backoff.Retry(func() error {
-		s3cp.Log.Debug("Start  complate Parts %# v", partsArray)
+		s3cp.Log.Debug("Start  multi.complate.  len(PartsArray)=%v", len(partsArray))
 		err = s3cp.multi.Complete(partsArray)
-		s3cp.Log.Warning("complate err: %# v", err)
+		if err != nil {
+			s3cp.Log.Warning("complate err: %# v", err)
+		}
 		return err
-	}, backoff.NewExponentialBackOff())
+	}, &backoffParam)
+	if err != nil {
+		s3cp.Log.Warning("multi.Complete Giveup Exponential Backoff - Max ElapsedTime:%v err:%v", backoffParam.MaxElapsedTime, err)
+	}
 	return parts, err
 }

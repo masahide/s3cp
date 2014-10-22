@@ -9,22 +9,35 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"time"
 
+	"github.com/crowdmob/goamz/s3"
+
+	"github.com/cenkalti/backoff"
 	"github.com/masahide/s3cp/lib"
 	"github.com/masahide/s3cp/pipelines"
 )
 
-var checkSize = true
-var checkMD5 = false
-var workNum = 1
-var region = "ap-northeast-1"
-var bucket = ""
-var cpPath = ""
-var destPath = ""
-var dirCopy = false
-var logLevel = 0
-var showVersion = false
-var version string
+var (
+	checkSize                = true
+	checkMD5                 = false
+	workNum                  = 1
+	region                   = "ap-northeast-1"
+	bucket                   = ""
+	cpPath                   = ""
+	destPath                 = ""
+	dirCopy                  = false
+	logLevel                 = 0
+	jsonLog                  = false
+	showVersion              = false
+	RetryInitialInterval     = 500 //500 * time.Millisecond
+	RetryRandomizationFactor = 0.5 //0.5
+	RetryMultiplier          = 1.5 //1.5
+	RetryMaxInterval         = 60  //60 * time.Second
+	RetryMaxElapsedTime      = 15  //15 * time.Minute
+	version                  string
+	BackoffParam             *backoff.ExponentialBackOff
+)
 
 func main() {
 	// Parse the command-line flags.
@@ -32,9 +45,17 @@ func main() {
 	flag.BoolVar(&dirCopy, "r", dirCopy, "directory copy mode")
 	flag.BoolVar(&checkSize, "checksize", checkSize, "check size")
 	flag.BoolVar(&checkMD5, "checkmd5", checkMD5, "check md5")
+	flag.BoolVar(&jsonLog, "jsonLog", jsonLog, "JSON output")
 	flag.StringVar(&region, "region", region, "region")
 	flag.IntVar(&workNum, "n", workNum, "max workers")
+	flag.IntVar(&RetryInitialInterval, "RetryInitialInterval", RetryInitialInterval, "Retry Initial Interval")
+	flag.Float64Var(&RetryRandomizationFactor, "RetryRandomizationFactor", RetryRandomizationFactor, "Retry Randomization Factor")
+	flag.Float64Var(&RetryMultiplier, "RetryMultiplier", RetryMultiplier, "Retry Multiplier")
+	flag.IntVar(&RetryMaxInterval, "RetryMaxInterval", RetryMaxInterval, "Retry Max Interval")
+	flag.IntVar(&RetryMaxElapsedTime, "RetryMaxElapsedTime", RetryMaxElapsedTime, "Retry Max Elapsed Time")
+
 	flag.IntVar(&logLevel, "d", logLevel, "log level")
+
 	flag.Parse()
 
 	if showVersion {
@@ -53,12 +74,26 @@ func main() {
 	cpPath = flag.Args()[0]
 	bucket = flag.Args()[1]
 	destPath = flag.Args()[2]
-	Log := lib.NewLoogerLevel(logLevel)
+
+	BackoffParam = backoff.NewExponentialBackOff()
+	BackoffParam.InitialInterval = time.Duration(RetryInitialInterval) * time.Millisecond
+	BackoffParam.RandomizationFactor = RetryRandomizationFactor
+	BackoffParam.Multiplier = RetryMultiplier
+	BackoffParam.MaxInterval = time.Duration(RetryMaxInterval) * time.Second
+	BackoffParam.MaxElapsedTime = time.Duration(RetryMaxElapsedTime) * time.Minute
+
+	var Log *lib.Logger
+	if jsonLog {
+		Log = lib.NewBufLoogerLevel(logLevel)
+	} else {
+		Log = lib.NewLoogerLevel(logLevel)
+	}
 	Log.Notice("copy %s -> %s:%s", cpPath, bucket, destPath)
 
 	cpus := runtime.NumCPU()
 	runtime.GOMAXPROCS(cpus)
 
+	var err error
 	if dirCopy {
 		cpPath = strings.TrimSuffix(cpPath, `/`)
 		destPath = strings.TrimSuffix(destPath, `/`)
@@ -92,14 +127,13 @@ func main() {
 		}
 
 		// Check whether the work failed.
-		if err := <-errc; err != nil {
+		if err = <-errc; err != nil {
 			Log.Error("Error: %v", err)
-			os.Exit(1)
 		}
 	} else {
-		var err error
 		s3cp := lib.NewS3cp()
 		s3cp.Log = Log
+		s3cp.BackoffParam = BackoffParam
 		s3cp.Region = region
 		s3cp.Bucket = bucket
 		s3cp.S3Path = destPath
@@ -108,13 +142,19 @@ func main() {
 		}
 		s3cp.FilePath = cpPath
 		s3cp.Auth()
-		parts, err := s3cp.S3ParallelMultipartUpload(workNum)
-		Log.Debug("parts:%#v\n", parts, err)
+		var parts map[int]s3.Part
+		parts, err = s3cp.S3ParallelMultipartUpload(workNum)
+		Log.Debug("parts:%v\n", parts, err)
 		if err != nil {
 			Log.Error("err:%#v\n", err)
-			os.Exit(1)
 		}
 	}
+	returnCode := 0
+	if err != nil {
+		returnCode = 1
+	}
+	os.Stdout.Write(Log.LogBufToJson(returnCode))
+	os.Exit(returnCode)
 
 }
 
@@ -181,6 +221,7 @@ func (t s3cpTask) Work() pipelines.TaskResult {
 	result := s3cpResult{task: t}
 
 	s3cp := lib.NewS3cp()
+	s3cp.BackoffParam = BackoffParam
 	s3cp.Bucket = bucket
 	s3cp.Region = region
 	s3cp.FilePath = t.path
