@@ -11,8 +11,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/crowdmob/goamz/s3"
-
 	"github.com/cenkalti/backoff"
 	"github.com/masahide/s3cp/lib"
 	"github.com/masahide/s3cp/pipelines"
@@ -37,6 +35,7 @@ var (
 	RetryMaxElapsedTime      = 15  //15 * time.Minute
 	version                  string
 	BackoffParam             *backoff.ExponentialBackOff
+	Log                      *lib.Logger
 )
 
 func main() {
@@ -82,7 +81,6 @@ func main() {
 	BackoffParam.MaxInterval = time.Duration(RetryMaxInterval) * time.Second
 	BackoffParam.MaxElapsedTime = time.Duration(RetryMaxElapsedTime) * time.Minute
 
-	var Log *lib.Logger
 	if jsonLog {
 		Log = lib.NewBufLoogerLevel(logLevel)
 	} else {
@@ -137,23 +135,27 @@ func main() {
 		s3cp.Region = region
 		s3cp.Bucket = bucket
 		s3cp.S3Path = destPath
+		s3cp.CheckSize = checkSize
+		//s3cp.CheckMD5 = checkMD5
+		s3cp.WorkNum = workNum
 		if strings.HasSuffix(destPath, "/") {
 			s3cp.S3Path = destPath + path.Base(cpPath)
 		}
 		s3cp.FilePath = cpPath
 		s3cp.Auth()
-		var parts map[int]s3.Part
-		parts, err = s3cp.S3ParallelMultipartUpload(workNum)
-		Log.Debug("parts:%v\n", parts, err)
-		if err != nil {
-			Log.Error("err:%#v\n", err)
+		var upload bool
+		upload, err = s3cp.FileUpload()
+		if upload {
+			Log.Info("Same file: %s", destPath)
 		}
 	}
 	returnCode := 0
 	if err != nil {
 		returnCode = 1
 	}
-	os.Stdout.Write(Log.LogBufToJson(returnCode))
+	if jsonLog {
+		os.Stdout.Write(Log.LogBufToJson(returnCode))
+	}
 	os.Exit(returnCode)
 
 }
@@ -225,9 +227,11 @@ func (t s3cpTask) Work() pipelines.TaskResult {
 	s3cp.Bucket = bucket
 	s3cp.Region = region
 	s3cp.FilePath = t.path
+	s3cp.Log = Log
 	s3cp.S3Path = to
 	s3cp.CheckSize = checkSize
 	s3cp.CheckMD5 = checkMD5
+	s3cp.WorkNum = workNum
 	s3cp.Auth()
 	result.to = to
 	result.upload, result.err = s3cp.FileUpload()
