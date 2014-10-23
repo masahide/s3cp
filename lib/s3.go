@@ -290,74 +290,6 @@ func (s3cp *S3cp) PutWorker(done chan struct{}, queue <-chan putWork, r chan<- r
 	end <- count
 }
 
-/*
-func (s3cp *S3cp) PutAll(r s3.ReaderAtSeeker, partSize int64) (map[int]s3.Part, error) {
-	var err error
-	var old []s3.Part
-	backoffParam := *s3cp.BackoffParam
-	err = backoff.Retry(func() error {
-		old, err = s3cp.multi.ListParts()
-		if err != nil && hasCode(err, "NoSuchUpload") {
-			return nil
-		}
-		return err
-	}, &backoffParam)
-	if err != nil {
-		s3cp.Log.Warning("Multi.ListParts Giveup Exponential Backoff - Max ElapsedTime:%v err:%v", backoffParam.MaxElapsedTime, err)
-		return nil, err
-	}
-	oldpart := map[int]s3.Part{}
-	for _, o := range old {
-		oldpart[o.N] = o
-	}
-	current := 1 // Part number of latest good part handled.
-	totalSize, err := r.Seek(0, 2)
-	if err != nil {
-		s3cp.Log.Warning("Seek err:%v", err)
-		return nil, err
-	}
-	first := true // Must send at least one empty part if the file is empty.
-	result := map[int]s3.Part{}
-NextSection:
-	for offset := int64(0); offset < totalSize || first; offset += partSize {
-		first = false
-		if offset+partSize > totalSize {
-			partSize = totalSize - offset
-		}
-		section := io.NewSectionReader(r, offset, partSize)
-
-		_, md5hex, _, err := seekerInfo(section)
-		if err != nil {
-			s3cp.Log.Warning("SeekInfo err: %v", err)
-			return nil, err
-		}
-		etag := `"` + md5hex + `"`
-		if part, ok := oldpart[current]; ok && part.Size == partSize && part.ETag == etag {
-			result[part.N] = part
-			s3cp.Log.Info("Already upload Part: %v", part)
-			current++
-			continue NextSection
-		}
-
-		// Part wasn't found or doesn't match. Send it.
-		var part s3.Part
-		s3cp.Log.Info("Start upload Part section: %v", section)
-		backoffParam := *s3cp.BackoffParam
-		err = backoff.Retry(func() error {
-			part, err = s3cp.multi.PutPart(current, section)
-			return err
-		}, &backoffParam)
-		if err != nil {
-			s3cp.Log.Warning("PutPart Giveup Exponential Backoff - Max ElapsedTime:%v err:%v", backoffParam.MaxElapsedTime, err)
-			return nil, err
-		}
-		s3cp.Log.Debug("uploaded Part section: %v , part: %v", section, part)
-		result[part.N] = part
-		current++
-	}
-	return result, nil
-}
-*/
 func (s3cp *S3cp) ParallelPutAll(r s3.ReaderAtSeeker, partSize int64, parallel int) (map[int]s3.Part, error) {
 	var err error
 	var old []s3.Part
@@ -435,50 +367,6 @@ func (s3cp *S3cp) ParallelPutAll(r s3.ReaderAtSeeker, partSize int64, parallel i
 
 	return resultMap, err
 }
-
-/*
-func (s3cp *S3cp) S3MultipartUpload() (map[int]s3.Part, error) {
-	bucket := s3cp.client.Bucket(s3cp.Bucket)
-	//key := fmt.Sprintf( "%s%s", s3cp.S3Path, path.Base(s3cp.FilePath),)
-	var err error
-	backoffParam := *s3cp.BackoffParam
-	err = backoff.Retry(func() error {
-		s3cp.multi, err = bucket.Multi(s3cp.S3Path, s3cp.MimeType, s3.Private, s3.Options{})
-		return err
-	}, &backoffParam)
-	if err != nil {
-		s3cp.Log.Warning("multi.ListParts Giveup Exponential Backoff - Max ElapsedTime:%v err:%v", backoffParam.MaxElapsedTime, err)
-		return nil, err
-	}
-
-	parts, err := s3cp.PutAll(s3cp.file, s3cp.PartSize)
-	if err != nil {
-		return nil, err
-	}
-	s3cp.Log.Debug("uploaded all Parts. len(parts)=%v", len(parts))
-
-	partsArray := make([]s3.Part, len(parts))
-	for _, p := range parts {
-		if p.N > len(parts) {
-			return nil, errors.New("part Number > len(parts)")
-		}
-		partsArray[p.N-1] = p
-	}
-	backoffParam = *s3cp.BackoffParam
-	err = backoff.Retry(func() error {
-		s3cp.Log.Debug("Start  multi.complate.  len(PartsArray)=%v", len(partsArray))
-		err = s3cp.multi.Complete(partsArray)
-		if err != nil {
-			s3cp.Log.Error("complate err: %v", err)
-		}
-		return err
-	}, &backoffParam)
-	if err != nil {
-		s3cp.Log.Warning("multi.Complete Giveup Exponential Backoff - Max ElapsedTime:%v err:%v", backoffParam.MaxElapsedTime, err)
-	}
-	return parts, err
-}
-*/
 
 func (s3cp *S3cp) S3ParallelMultipartUpload(parallel int) (map[int]s3.Part, error) {
 	var err error
