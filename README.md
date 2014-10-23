@@ -3,9 +3,11 @@ s3cp
 
 [![Build Status](https://drone.io/github.com/masahide/s3cp/status.png)](https://drone.io/github.com/masahide/s3cp/latest)
 
-* S3へのrsyncのようにディレクトリ丸ごとアップロードします。
-* アップロードの際、並列で複数のファイルを同時にアップロードすることが可能です。
-* 既にアップロード済みのファイルがある場合は、ファイルサイズもしくはmd5sum(オプションで指定可)で検証し、異なる場合は上書きでアップロードします。
+* S3へrsyncのようにディレクトリ丸ごとアップロードします
+* アップロードの際、並列で複数のファイルを同時にアップロードすることが可能です
+* 既にアップロード済みのファイルがある場合は、ファイルサイズもしくはmd5sum(オプションで指定可)で検証し、異なる場合は上書きでアップロードします
+* 20MB以上のファイルは分割し [マルチパートアップロード](http://docs.aws.amazon.com/ja_jp/AmazonS3/latest/dev/uploadobjusingmpu.html) を並列で行います
+* アップロードの中断・再開に対応(20MB以上のファイルのアップロード時は処理のエラー等による中断またはctrl+c等の強制中断を行った後、再度アップロードを実行した場合はアップロード済みパートはスキップする)
 
 Download
 --------
@@ -16,9 +18,9 @@ https://drone.io/github.com/masahide/s3cp/files
 注意
 ----
 
-* 現状ACLは固定ですべてprivateになります。
-* S3からのダウンロード機能は未実装です。
-* シンボリックリンクは追跡します。(循環参照無限ループを回避するため、symlinkは20階層でストップします)
+* 現状ACLは固定ですべてprivateになります
+* S3からのダウンロード機能は未実装です
+* シンボリックリンクは追跡します(循環参照無限ループを回避するため、symlinkは20階層でストップします)
 * Windowsはまだ未対応
 
 
@@ -27,7 +29,7 @@ https://drone.io/github.com/masahide/s3cp/files
 環境変数
 --------
 
-実行前にAWSのAccess keyとSecret access keyを環境変数にセットする必要があります。
+実行前にAWSのAccess keyとSecret access keyを環境変数にセットする必要があります
 
 ```bash:
 export AWS_ACCESS_KEY_ID="hoge"
