@@ -265,12 +265,11 @@ func (s3cp *S3cp) PutWorker(done chan struct{}, queue <-chan putWork, r chan<- r
 				s3cp.Log.Info("Start upload Part section Num:%v", w.current)
 				backoffParam := *s3cp.BackoffParam
 				err = backoff.Retry(func() error {
-					res.part, err = s3cp.multi.PutPart(w.current, w.section)
-					if err != nil {
-						s3cp.Log.Warning("PutPart err:%v", err)
-						res.err = err
+					res.part, res.err = s3cp.multi.PutPart(w.current, w.section)
+					if res.err != nil {
+						s3cp.Log.Warning("PutPart err Part Num:%v err: %v", w.current, res.err)
 					}
-					return err
+					return res.err
 				}, &backoffParam)
 				if err != nil {
 					s3cp.Log.Warning("PutPart Giveup Exponential Backoff - Max ElapsedTime:%v", backoffParam.MaxElapsedTime)
@@ -290,6 +289,8 @@ func (s3cp *S3cp) PutWorker(done chan struct{}, queue <-chan putWork, r chan<- r
 	}
 	end <- count
 }
+
+/*
 func (s3cp *S3cp) PutAll(r s3.ReaderAtSeeker, partSize int64) (map[int]s3.Part, error) {
 	var err error
 	var old []s3.Part
@@ -356,7 +357,7 @@ NextSection:
 	}
 	return result, nil
 }
-
+*/
 func (s3cp *S3cp) ParallelPutAll(r s3.ReaderAtSeeker, partSize int64, parallel int) (map[int]s3.Part, error) {
 	var err error
 	var old []s3.Part
@@ -435,6 +436,7 @@ func (s3cp *S3cp) ParallelPutAll(r s3.ReaderAtSeeker, partSize int64, parallel i
 	return resultMap, err
 }
 
+/*
 func (s3cp *S3cp) S3MultipartUpload() (map[int]s3.Part, error) {
 	bucket := s3cp.client.Bucket(s3cp.Bucket)
 	//key := fmt.Sprintf( "%s%s", s3cp.S3Path, path.Base(s3cp.FilePath),)
@@ -476,6 +478,8 @@ func (s3cp *S3cp) S3MultipartUpload() (map[int]s3.Part, error) {
 	}
 	return parts, err
 }
+*/
+
 func (s3cp *S3cp) S3ParallelMultipartUpload(parallel int) (map[int]s3.Part, error) {
 	var err error
 	bucket := s3cp.client.Bucket(s3cp.Bucket)
@@ -505,8 +509,9 @@ func (s3cp *S3cp) S3ParallelMultipartUpload(parallel int) (map[int]s3.Part, erro
 
 	partsArray := make([]s3.Part, len(parts))
 	for _, p := range parts {
-		if p.N > len(parts) {
-			return nil, errors.New("part Number > len(parts)")
+		if p.N > len(partsArray) || p.N <= 0 {
+			s3cp.Log.Debug("Err: [part Number > len(parts) or <=0] parts: %v", parts)
+			return nil, errors.New("part Number > len(parts) or <=0")
 		}
 		partsArray[p.N-1] = p
 	}

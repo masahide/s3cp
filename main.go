@@ -148,9 +148,11 @@ func main() {
 		} else {
 			var upload bool
 			upload, err = s3cp.FileUpload()
-			if !upload {
+			if err != nil {
+				Log.Error("FileUpload err:%v", err)
+			} else if !upload {
 				Log.Info("Same file: %s", destPath)
-			} else if err == nil {
+			} else {
 				Log.Info("Uploaded.")
 			}
 		}

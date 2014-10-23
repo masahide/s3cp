@@ -89,9 +89,9 @@ $ s3cp -r /var/tmp/piyo test-bucket html/fuge
  *  -d=0: log level
    * ログ出力レベルの指定。0から5までで5が最大限に情報を出力します
  * 以下はリトライのルールを設定します
-   *  -RetryInitialInterval=500: Retry Initial Interval
-   *  -RetryMaxElapsedTime=15: Retry Max Elapsed Time
-   *  -RetryMaxInterval=60: Retry Max Interval
+   *  -RetryInitialInterval=500: Retry Initial Interval (Millisecond)
+   *  -RetryMaxElapsedTime=15: Retry Max Elapsed Time (Minute)
+   *  -RetryMaxInterval=60: Retry Max Interval (Second)
    *  -RetryMultiplier=1.5: Retry Multiplier
    *  -RetryRandomizationFactor=0.5: Retry Randomization Factor
 
