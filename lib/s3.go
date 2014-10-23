@@ -96,7 +96,6 @@ func (s3cp *S3cp) FileUpload() (upload bool, err error) {
 
 	err = s3cp.CompareFile()
 	if err == nil {
-		upload = false
 		return
 	}
 	if size, _ := FileSize(s3cp.FilePath); size > s3cp.PartSize {
