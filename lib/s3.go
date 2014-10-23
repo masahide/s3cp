@@ -265,12 +265,12 @@ func (s3cp *S3cp) PutWorker(done chan struct{}, queue <-chan putWork, r chan<- r
 				s3cp.Log.Info("Start upload Part section Num:%v", w.current)
 				backoffParam := *s3cp.BackoffParam
 				err = backoff.Retry(func() error {
-					res.part, err = s3cp.multi.PutPart(w.current, w.section)
-					if err != nil {
+					res.part, res.err = s3cp.multi.PutPart(w.current, w.section)
+					if res.err != nil {
 						s3cp.Log.Warning("PutPart err:%v", err)
 						res.err = err
 					}
-					return err
+					return res.err
 				}, &backoffParam)
 				if err != nil {
 					s3cp.Log.Warning("PutPart Giveup Exponential Backoff - Max ElapsedTime:%v", backoffParam.MaxElapsedTime)
@@ -505,7 +505,8 @@ func (s3cp *S3cp) S3ParallelMultipartUpload(parallel int) (map[int]s3.Part, erro
 
 	partsArray := make([]s3.Part, len(parts))
 	for _, p := range parts {
-		if p.N > len(parts) {
+		if p.N > len(partsArray) {
+			s3cp.Log.Debug("Err: part Number > len(parts) parts: %v", parts)
 			return nil, errors.New("part Number > len(parts)")
 		}
 		partsArray[p.N-1] = p
