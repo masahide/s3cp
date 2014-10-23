@@ -142,11 +142,17 @@ func main() {
 			s3cp.S3Path = destPath + path.Base(cpPath)
 		}
 		s3cp.FilePath = cpPath
-		s3cp.Auth()
-		var upload bool
-		upload, err = s3cp.FileUpload()
-		if upload {
-			Log.Info("Same file: %s", destPath)
+		err = s3cp.Auth()
+		if err != nil {
+			Log.Error("%v", err)
+		} else {
+			var upload bool
+			upload, err = s3cp.FileUpload()
+			if !upload {
+				Log.Info("Same file: %s", destPath)
+			} else if err == nil {
+				Log.Info("Uploaded.")
+			}
 		}
 	}
 	returnCode := 0

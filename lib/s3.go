@@ -98,7 +98,7 @@ func (s3cp *S3cp) FileUpload() (upload bool, err error) {
 	if err == nil {
 		return
 	}
-	if size, _ := FileSize(s3cp.FilePath); size > 1024*1024*20 {
+	if size, _ := FileSize(s3cp.FilePath); size > s3cp.PartSize {
 		// multipart upload
 		var parts map[int]s3.Part
 		s3cp.Log.Debug("start Multipart Upload:%v", s3cp.FilePath)
