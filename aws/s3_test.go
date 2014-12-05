@@ -1,4 +1,4 @@
-package lib
+package aws
 
 import "testing"
 
@@ -19,6 +19,7 @@ func TestExists(t *testing.T) {
 	err := s3cp.Auth()
 	if err != nil {
 		t.Errorf("s3cp.Auth err: %v", err)
+		return
 	}
 	err = s3cp.Exists(0, "")
 	if err != nil {

@@ -12,7 +12,9 @@ import (
 	"time"
 
 	"github.com/cenkalti/backoff"
-	"github.com/masahide/s3cp/lib"
+	"github.com/masahide/s3cp/aws"
+	"github.com/masahide/s3cp/file"
+	"github.com/masahide/s3cp/logger"
 	"github.com/masahide/s3cp/pipelines"
 )
 
@@ -35,7 +37,7 @@ var (
 	RetryMaxElapsedTime      = 15  //15 * time.Minute
 	version                  string
 	BackoffParam             *backoff.ExponentialBackOff
-	Log                      *lib.Logger
+	Log                      *logger.Logger
 )
 
 func main() {
@@ -82,9 +84,9 @@ func main() {
 	BackoffParam.MaxElapsedTime = time.Duration(RetryMaxElapsedTime) * time.Minute
 
 	if jsonLog {
-		Log = lib.NewBufLoogerLevel(logLevel)
+		Log = logger.NewBufLoogerLevel(logLevel)
 	} else {
-		Log = lib.NewLoogerLevel(logLevel)
+		Log = logger.NewLoogerLevel(logLevel)
 	}
 	Log.Notice("copy %s -> %s:%s", cpPath, bucket, destPath)
 
@@ -129,7 +131,7 @@ func main() {
 			Log.Error("Error: %v", err)
 		}
 	} else {
-		s3cp := lib.NewS3cp()
+		s3cp := aws.NewS3cp()
 		s3cp.Log = Log
 		s3cp.BackoffParam = BackoffParam
 		s3cp.Region = region
@@ -171,11 +173,11 @@ func main() {
 type GenUploadTask struct {
 	cpPath   string
 	destPath string
-	Log      *lib.Logger
+	Log      *logger.Logger
 }
 
 func (g *GenUploadTask) MakeTask(done <-chan struct{}, tasks chan<- pipelines.Task) error {
-	errs := lib.ListFiles(
+	errs := file.ListFiles(
 		g.cpPath,
 		func(path string, info os.FileInfo, err error) error {
 			if err != nil {
@@ -230,7 +232,7 @@ func (t s3cpTask) Work() pipelines.TaskResult {
 	//log.Printf("t.path:%s", t.path)
 	result := s3cpResult{task: t}
 
-	s3cp := lib.NewS3cp()
+	s3cp := aws.NewS3cp()
 	s3cp.BackoffParam = BackoffParam
 	s3cp.Bucket = bucket
 	s3cp.Region = region

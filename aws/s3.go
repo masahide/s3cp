@@ -1,4 +1,4 @@
-package lib
+package aws
 
 import (
 	"crypto/md5"
@@ -8,10 +8,13 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"time"
 
 	"github.com/cenkalti/backoff"
 	"github.com/crowdmob/goamz/aws"
 	"github.com/crowdmob/goamz/s3"
+	"github.com/masahide/s3cp/file"
+	"github.com/masahide/s3cp/logger"
 )
 
 var AWSRegions = map[string]aws.Region{
@@ -35,7 +38,7 @@ type S3cp struct {
 	PartSize     int64
 	CheckMD5     bool
 	CheckSize    bool
-	Log          *Logger
+	Log          *logger.Logger
 	multi        *s3.Multi
 	client       *s3.S3
 	file         *os.File
@@ -51,7 +54,7 @@ func NewS3cp() *S3cp {
 		CheckMD5:  false,
 		CheckSize: false,
 		PartSize:  20 * 1024 * 1024,
-		Log:       NewLooger(),
+		Log:       logger.NewLooger(),
 	}
 	/*
 		s3cp.MimeType = ChooseNonEmpty(mimeType, s3cp.MimeType)
@@ -61,7 +64,7 @@ func NewS3cp() *S3cp {
 }
 
 func (s3cp *S3cp) Auth() error {
-	auth, err := aws.EnvAuth()
+	auth, err := aws.GetAuth("", "", "", time.Time{})
 	if err != nil {
 		return err
 	}
@@ -98,7 +101,7 @@ func (s3cp *S3cp) FileUpload() (upload bool, err error) {
 	if err == nil {
 		return
 	}
-	if size, _ := FileSize(s3cp.FilePath); size > s3cp.PartSize {
+	if size, _ := file.FileSize(s3cp.FilePath); size > s3cp.PartSize {
 		// multipart upload
 		var parts map[int]s3.Part
 		s3cp.Log.Debug("start Multipart Upload:%v", s3cp.FilePath)
@@ -153,7 +156,7 @@ func (s3cp *S3cp) CompareFile() error {
 		size = 0
 	}
 	if s3cp.CheckMD5 {
-		md5sum, err = Md5sum(s3cp.file)
+		md5sum, err = file.Md5sum(s3cp.file)
 		if err != nil {
 			return err
 		}
