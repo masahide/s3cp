@@ -26,15 +26,29 @@ https://drone.io/github.com/masahide/s3cp/files
 
 
 
-環境変数
---------
+セキュリティ認証情報
+--------------------
 
-実行前にAWSのAccess keyとSecret access keyを環境変数にセットする必要があります
+
+AWSの認証情報(Access keyやSecret access keyなど)の指定は、以下の3つの方法に対応しており、
+s3cpは自動でこの順番に認証方式を試みます
+
+* 環境変数にセット
 
 ```bash:
 export AWS_ACCESS_KEY_ID="hoge"
 export AWS_SECRET_ACCESS_KEY="fuga"
 ````
+
+* IAM rolesをインスタンスに設定する
+詳細はこちらに
+http://docs.aws.amazon.com/ja_jp/AWSEC2/latest/UserGuide/iam-roles-for-amazon-ec2.html
+
+* Credential file (~/.aws/credentials) の[default]に設定する
+詳細はこちらに
+http://docs.aws.amazon.com/cli/latest/userguide/cli-chap-getting-started.html#cli-config-files
+
+
 
 使い方
 ------
