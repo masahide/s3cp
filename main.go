@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"github.com/cenkalti/backoff"
-	"github.com/masahide/s3cp/aws"
+	"github.com/masahide/s3cp/awscp"
 	"github.com/masahide/s3cp/file"
 	"github.com/masahide/s3cp/logger"
 	"github.com/masahide/s3cp/pipelines"
@@ -131,15 +131,17 @@ func main() {
 			Log.Error("Error: %v", err)
 		}
 	} else {
-		s3cp := aws.NewS3cp()
-		s3cp.Log = Log
-		s3cp.BackoffParam = BackoffParam
-		s3cp.Region = region
-		s3cp.Bucket = bucket
-		s3cp.S3Path = destPath
-		s3cp.CheckSize = checkSize
-		//s3cp.CheckMD5 = checkMD5
-		s3cp.WorkNum = workNum
+		s3cp := awscp.AwsS3cp{
+			Region:    region,
+			Bucket:    bucket,
+			S3Path:    destPath,
+			MimeType:  "application/octet-stream",
+			PartSize:  20 * 1024 * 1024,
+			CheckSize: checkSize,
+			CheckMD5:  checkMD5,
+			WorkNum:   workNum,
+			Log:       logger.NewLooger(),
+		}
 		if strings.HasSuffix(destPath, "/") {
 			s3cp.S3Path = destPath + path.Base(cpPath)
 		}
@@ -232,16 +234,18 @@ func (t s3cpTask) Work() pipelines.TaskResult {
 	//log.Printf("t.path:%s", t.path)
 	result := s3cpResult{task: t}
 
-	s3cp := aws.NewS3cp()
-	s3cp.BackoffParam = BackoffParam
-	s3cp.Bucket = bucket
-	s3cp.Region = region
-	s3cp.FilePath = t.path
-	s3cp.Log = Log
-	s3cp.S3Path = to
-	s3cp.CheckSize = checkSize
-	s3cp.CheckMD5 = checkMD5
-	s3cp.WorkNum = workNum
+	s3cp := awscp.AwsS3cp{
+		Region:    region,
+		Bucket:    bucket,
+		S3Path:    to,
+		MimeType:  "application/octet-stream",
+		PartSize:  20 * 1024 * 1024,
+		CheckSize: checkSize,
+		CheckMD5:  checkMD5,
+		WorkNum:   workNum,
+		Log:       Log,
+		FilePath:  t.path,
+	}
 	s3cp.Auth()
 	result.to = to
 	result.upload, result.err = s3cp.FileUpload()
