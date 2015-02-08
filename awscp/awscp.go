@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/http"
 	"os"
 
 	"github.com/awslabs/aws-sdk-go/aws"
@@ -18,23 +17,20 @@ import (
 )
 
 type AwsS3cp struct {
-	Region     string
-	Bucket     string
-	S3Path     string
-	FilePath   string
-	MimeType   string
-	PartSize   int64
-	CheckMD5   bool
-	CheckSize  bool
-	Acl        string
-	Log        *logger.Logger
-	HttpClient *http.Client
-	//multi        *s3.Multi
-	UploadID aws.StringValue
-	client   *awss3.S3
-	file     *os.File
-	fileinfo os.FileInfo
-	WorkNum  int
+	Bucket    string
+	S3Path    string
+	FilePath  string
+	MimeType  string
+	PartSize  int64
+	CheckMD5  bool
+	CheckSize bool
+	Acl       string
+	Log       *logger.Logger
+	UploadID  aws.StringValue
+	client    *awss3.S3
+	file      *os.File
+	fileinfo  os.FileInfo
+	WorkNum   int
 }
 
 type PartListError struct {
@@ -76,15 +72,11 @@ type ReaderAtSeeker interface {
 	io.ReadSeeker
 }
 
-func (a *AwsS3cp) Auth() error {
-	credPrv := aws.DetectCreds("", "", "")
-	//s3cp.client = s3.New(auth, AWSRegions[s3cp.Region])
-	s := s3.New(credPrv, a.Region, a.HttpClient)
+func (a *AwsS3cp) SetS3client(s *s3.S3, bf awss3.Backoff) {
 	a.client = &awss3.S3{
 		S3:      *s,
-		Backoff: awss3.NewBackoff(),
+		Backoff: bf,
 	}
-	return nil
 }
 
 func (a *AwsS3cp) FileUpload() (upload bool, err error) {
