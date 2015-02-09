@@ -102,7 +102,7 @@ func (a *AwsS3cp) FileUpload() (upload bool, err error) {
 		parts, err = a.S3ParallelMultipartUpload(a.WorkNum)
 		a.Log.Debug("parts:%v\n", parts, err)
 	} else {
-		err = a.S3Upload()
+		err = a.S3Upload(size)
 	}
 	if err != nil {
 		a.Log.Error("err:%#v\n", err)
@@ -425,7 +425,7 @@ func (a *AwsS3cp) S3ParallelMultipartUpload(parallel int) (map[int]s3.CompletedP
 	return parts, err
 }
 
-func (a *AwsS3cp) S3Upload() error {
+func (a *AwsS3cp) S3Upload(size int64) error {
 	req := s3.PutObjectRequest{
 		ACL:    aws.String(a.Acl),    // aws.StringValue   `xml:"-"`
 		Body:   a.file,               // io.ReadCloser     `xml:"-"`
@@ -434,7 +434,7 @@ func (a *AwsS3cp) S3Upload() error {
 		//ContentDisposition      :, // aws.StringValue   `xml:"-"`
 		//ContentEncoding         :, // aws.StringValue   `xml:"-"`
 		//ContentLanguage         :, // aws.StringValue   `xml:"-"`
-		//ContentLength           :, // aws.LongValue     `xml:"-"`
+		ContentLength: &size, // aws.LongValue     `xml:"-"`
 		//ContentMD5              :, // aws.StringValue   `xml:"-"`
 		ContentType: aws.String(a.MimeType), // aws.StringValue   `xml:"-"`
 		//Expires                 :, // time.Time         `xml:"-"`
