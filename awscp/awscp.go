@@ -11,7 +11,9 @@ import (
 
 	"github.com/awslabs/aws-sdk-go/aws"
 	"github.com/awslabs/aws-sdk-go/gen/s3"
+	"github.com/k0kubun/pp"
 	"github.com/masahide/s3cp/awss3"
+	"github.com/masahide/s3cp/backoff"
 	"github.com/masahide/s3cp/file"
 	"github.com/masahide/s3cp/logger"
 )
@@ -72,7 +74,7 @@ type ReaderAtSeeker interface {
 	io.ReadSeeker
 }
 
-func (a *AwsS3cp) SetS3client(s *s3.S3, bf awss3.Backoff) {
+func (a *AwsS3cp) SetS3client(s *s3.S3, bf backoff.Backoff) {
 	a.client = &awss3.S3{
 		S3:      *s,
 		Backoff: bf,
@@ -100,7 +102,10 @@ func (a *AwsS3cp) FileUpload() (upload bool, err error) {
 		var parts map[int]s3.CompletedPart
 		a.Log.Debug("start Multipart Upload:%v", a.FilePath)
 		parts, err = a.S3ParallelMultipartUpload(a.WorkNum)
-		a.Log.Debug("parts:%v\n", parts, err)
+		if err != nil {
+			a.Log.Error("FileUpload.S3ParallelMultipartUpload: %s", err)
+		}
+		a.Log.Debug("parts:%v", parts)
 	} else {
 		err = a.S3Upload(size)
 	}
@@ -207,12 +212,12 @@ func (a *AwsS3cp) Exists(size int64, md5sum string) error {
 	return nil
 }
 
-func (a *AwsS3cp) ParallelPutAll(r ReaderAtSeeker, partSize int64, parallel int) (map[int]s3.CompletedPart, error) {
+func (a *AwsS3cp) ParallelPutAll(r *os.File, partSize int64, parallel int) (map[int]s3.CompletedPart, error) {
 	var err error
 	req := &s3.ListMultipartUploadsRequest{
-		Bucket: aws.String(a.Bucket), // aws.StringValue  `xml:"-"`
-		Prefix: aws.String(a.S3Path), // aws.StringValue  `xml:"-"`
-		//Delimiter      :aws.String("") , // aws.StringValue  `xml:"-"`
+		Bucket:    aws.String(a.Bucket), // aws.StringValue  `xml:"-"`
+		Prefix:    aws.String(a.S3Path), // aws.StringValue  `xml:"-"`
+		Delimiter: aws.String("/"),      // aws.StringValue  `xml:"-"`
 		//MaxUploads: aws.Integer(MaxUploads), // aws.IntegerValue `xml:"-"`
 		//EncodingType   : , // aws.StringValue  `xml:"-"`
 		//KeyMarker      : , // aws.StringValue  `xml:"-"`
@@ -259,12 +264,14 @@ func (a *AwsS3cp) ParallelPutAll(r ReaderAtSeeker, partSize int64, parallel int)
 		return nil, err
 	}
 
+	a.Log.Debug("oldpart:", oldpart)
 	current := 1 // Part number of latest good part handled.
-	totalSize, err := r.Seek(0, 2)
+	finfo, err := r.Stat()
 	if err != nil {
-		a.Log.Warning("Seek err:%v", err)
+		a.Log.Warning("info err:%v", err)
 		return nil, err
 	}
+	totalSize := finfo.Size()
 	first := true // Must send at least one empty part if the file is empty.
 
 	done := make(chan struct{})
@@ -333,7 +340,7 @@ func (a *AwsS3cp) PutWorker(done chan struct{}, queue <-chan putWork, r chan<- r
 				res.part = s3.CompletedPart{ETag: aws.String(etag), PartNumber: aws.Integer(w.current)}
 			} else {
 				// Part wasn't found or doesn't match. Send it.
-				a.Log.Info("Start upload Part section Num:%v", w.current)
+				a.Log.Info("Start upload Part section Num:%d", w.current)
 				req := s3.UploadPartRequest{
 					Body:          w.section,              // io.ReadCloser    `xml:"-"`
 					Bucket:        aws.String(a.Bucket),   // aws.StringValue  `xml:"-"`
@@ -351,9 +358,9 @@ func (a *AwsS3cp) PutWorker(done chan struct{}, queue <-chan putWork, r chan<- r
 				}
 				//res.part, res.err = a.multi.PutPart(w.current, w.section)
 				if err != nil {
-					a.Log.Warning("PutPart err Part Num:%v err: %v", w.current, res.err)
+					a.Log.Warning("UploadPart err Part Num:%d err: %v", w.current, res.err)
 				} else {
-					a.Log.Info("uploaded Part section Num:%v", res.part.PartNumber)
+					a.Log.Info("uploaded Part section Num:%d", res.part.PartNumber)
 				}
 			}
 		}
@@ -381,6 +388,7 @@ func seekerInfo(r io.ReadSeeker) (size int64, md5hex string, md5b64 string, err 
 	sum := digest.Sum(nil)
 	md5hex = hex.EncodeToString(sum)
 	md5b64 = base64.StdEncoding.EncodeToString(sum)
+	_, err = r.Seek(0, 0)
 	return size, md5hex, md5b64, nil
 }
 
@@ -418,6 +426,7 @@ func (a *AwsS3cp) S3ParallelMultipartUpload(parallel int) (map[int]s3.CompletedP
 		}, // *CompletedMultipartUpload `xml:"CompleteMultipartUpload,omitempty"`
 	}
 	_, err = a.client.CompleteMultipartUpload(&req)
+	pp.Print(req)
 	if err != nil {
 		a.Log.Error("complate err: %# v", err)
 		return nil, err
@@ -427,30 +436,12 @@ func (a *AwsS3cp) S3ParallelMultipartUpload(parallel int) (map[int]s3.CompletedP
 
 func (a *AwsS3cp) S3Upload(size int64) error {
 	req := s3.PutObjectRequest{
-		ACL:    aws.String(a.Acl),    // aws.StringValue   `xml:"-"`
-		Body:   a.file,               // io.ReadCloser     `xml:"-"`
-		Bucket: aws.String(a.Bucket), // aws.StringValue   `xml:"-"`
-		//CacheControl            :, // aws.StringValue   `xml:"-"`
-		//ContentDisposition      :, // aws.StringValue   `xml:"-"`
-		//ContentEncoding         :, // aws.StringValue   `xml:"-"`
-		//ContentLanguage         :, // aws.StringValue   `xml:"-"`
-		ContentLength: &size, // aws.LongValue     `xml:"-"`
-		//ContentMD5              :, // aws.StringValue   `xml:"-"`
-		ContentType: aws.String(a.MimeType), // aws.StringValue   `xml:"-"`
-		//Expires                 :, // time.Time         `xml:"-"`
-		//GrantFullControl        :, // aws.StringValue   `xml:"-"`
-		//GrantRead               :, // aws.StringValue   `xml:"-"`
-		//GrantReadACP            :, // aws.StringValue   `xml:"-"`
-		//GrantWriteACP           :, // aws.StringValue   `xml:"-"`
-		Key: aws.String(a.S3Path), // aws.StringValue   `xml:"-"`
-		//Metadata                :, // map[string]string `xml:"-"`
-		//SSECustomerAlgorithm    :, // aws.StringValue   `xml:"-"`
-		//SSECustomerKey          :, // aws.StringValue   `xml:"-"`
-		//SSECustomerKeyMD5       :, // aws.StringValue   `xml:"-"`
-		//SSEKMSKeyID             :, // aws.StringValue   `xml:"-"`
-		//ServerSideEncryption    :, // aws.StringValue   `xml:"-"`
-		//StorageClass            :, // aws.StringValue   `xml:"-"`
-		//WebsiteRedirectLocation :, // aws.StringValue   `xml:"-"`
+		ACL:           aws.String(a.Acl),      // aws.StringValue   `xml:"-"`
+		Body:          a.file,                 // io.ReadCloser     `xml:"-"`
+		Bucket:        aws.String(a.Bucket),   // aws.StringValue   `xml:"-"`
+		ContentLength: &size,                  // aws.LongValue     `xml:"-"`
+		ContentType:   aws.String(a.MimeType), // aws.StringValue   `xml:"-"`
+		Key:           aws.String(a.S3Path),   // aws.StringValue   `xml:"-"`
 	}
 	//key := fmt.Sprintf( "%s%s", a.S3Path, path.Base(a.FilePath),)
 	_, err := a.client.PutObject(&req)

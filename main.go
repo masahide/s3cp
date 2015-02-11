@@ -15,7 +15,7 @@ import (
 	"github.com/awslabs/aws-sdk-go/aws"
 	"github.com/awslabs/aws-sdk-go/gen/s3"
 	"github.com/masahide/s3cp/awscp"
-	"github.com/masahide/s3cp/awss3"
+	"github.com/masahide/s3cp/backoff"
 	"github.com/masahide/s3cp/file"
 	"github.com/masahide/s3cp/logger"
 	"github.com/masahide/s3cp/pipelines"
@@ -38,10 +38,11 @@ var (
 	RetryMultiplier          = 1.5 //1.5
 	RetryMaxInterval         = 60  //60 * time.Second
 	RetryMaxElapsedTime      = 15  //15 * time.Minute
+	Acl                      = "praivate"
 	version                  string
 	Log                      *logger.Logger
 	S3client                 *s3.S3
-	backoff                  awss3.Backoff
+	Backoff                  backoff.Backoff
 )
 
 func main() {
@@ -52,6 +53,7 @@ func main() {
 	flag.BoolVar(&checkMD5, "checkmd5", checkMD5, "check md5")
 	flag.BoolVar(&jsonLog, "jsonLog", jsonLog, "JSON output")
 	flag.StringVar(&region, "region", region, "region")
+	flag.StringVar(&Acl, "ACL", Acl, "ACL")
 	flag.IntVar(&workNum, "n", workNum, "max workers")
 	flag.IntVar(&RetryInitialInterval, "RetryInitialInterval", RetryInitialInterval, "Retry Initial Interval")
 	flag.Float64Var(&RetryRandomizationFactor, "RetryRandomizationFactor", RetryRandomizationFactor, "Retry Randomization Factor")
@@ -82,12 +84,12 @@ func main() {
 
 	client := &http.Client{Timeout: time.Duration(5) * time.Second}
 	S3client = s3.New(aws.DetectCreds("", "", ""), region, client)
-	backoff = awss3.NewBackoff()
-	backoff.InitialInterval = time.Duration(RetryInitialInterval) * time.Millisecond
-	backoff.RandomizationFactor = RetryRandomizationFactor
-	backoff.Multiplier = RetryMultiplier
-	backoff.MaxInterval = time.Duration(RetryMaxInterval) * time.Second
-	backoff.MaxElapsedTime = time.Duration(RetryMaxElapsedTime) * time.Minute
+	Backoff = backoff.NewBackoff()
+	Backoff.InitialInterval = time.Duration(RetryInitialInterval) * time.Millisecond
+	Backoff.RandomizationFactor = RetryRandomizationFactor
+	Backoff.Multiplier = RetryMultiplier
+	Backoff.MaxInterval = time.Duration(RetryMaxInterval) * time.Second
+	Backoff.MaxElapsedTime = time.Duration(RetryMaxElapsedTime) * time.Minute
 
 	if jsonLog {
 		Log = logger.NewBufLoogerLevel(logLevel)
@@ -140,6 +142,7 @@ func main() {
 		s3cp := awscp.AwsS3cp{
 			Bucket:    bucket,
 			S3Path:    destPath,
+			Acl:       Acl,
 			MimeType:  "application/octet-stream",
 			PartSize:  20 * 1024 * 1024,
 			CheckSize: checkSize,
@@ -151,7 +154,7 @@ func main() {
 		if strings.HasSuffix(destPath, "/") {
 			s3cp.S3Path = destPath + path.Base(cpPath)
 		}
-		s3cp.SetS3client(S3client, backoff)
+		s3cp.SetS3client(S3client, Backoff)
 		var upload bool
 		upload, err = s3cp.FileUpload()
 		if err != nil {
@@ -246,7 +249,7 @@ func (t s3cpTask) Work() pipelines.TaskResult {
 		Log:       Log,
 		FilePath:  t.path,
 	}
-	s3cp.SetS3client(S3client, backoff)
+	s3cp.SetS3client(S3client, Backoff)
 	result.to = to
 	result.upload, result.err = s3cp.FileUpload()
 

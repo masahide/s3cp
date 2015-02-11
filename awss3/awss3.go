@@ -3,7 +3,7 @@ package awss3
 import (
 	"github.com/awslabs/aws-sdk-go/aws"
 	"github.com/awslabs/aws-sdk-go/gen/s3"
-	"github.com/cenkalti/backoff"
+	"github.com/masahide/s3cp/backoff"
 )
 
 var (
@@ -13,26 +13,10 @@ var (
 	MaxUploads = aws.IntegerValue(&maxUploads)
 )
 
-// Backoff : ExponentialBack package wapper
-type Backoff struct {
-	backoff.ExponentialBackOff
-}
-
-// 初期化
-func NewBackoff() Backoff {
-	return Backoff{ExponentialBackOff: *backoff.NewExponentialBackOff()}
-}
-
-// Retry
-func (b Backoff) Retry(f func() error) error {
-	o := b.ExponentialBackOff
-	return backoff.Retry(func() error { return f() }, &o)
-}
-
 // S3 struct
 type S3 struct {
 	s3.S3
-	Backoff
+	backoff.Backoff
 }
 
 func shouldRetry(err error) error {
@@ -146,33 +130,61 @@ func (c *S3) ListObjectsCallBack(req *s3.ListObjectsRequest, dirCb func(s3.Commo
 }
 
 func (c *S3) CreateMultipartUpload(req *s3.CreateMultipartUploadRequest) (resp *s3.CreateMultipartUploadOutput, err error) {
+	var breakErr error
 	err = c.Retry(func() error {
 		resp, err = c.S3.CreateMultipartUpload(req)
+		if breakErr = shouldRetry(err); breakErr != nil {
+			return nil
+		}
 		return err
 	})
+	if breakErr != nil { // breakするエラーが発生した
+		err = breakErr
+	}
 	return
 }
 
 func (c *S3) UploadPart(req *s3.UploadPartRequest) (resp *s3.UploadPartOutput, err error) {
+	var breakErr error
 	err = c.Retry(func() error {
 		resp, err = c.S3.UploadPart(req)
+		if breakErr = shouldRetry(err); breakErr != nil {
+			return nil
+		}
 		return err
 	})
+	if breakErr != nil { // breakするエラーが発生した
+		err = breakErr
+	}
 	return
 }
 
 func (c *S3) CompleteMultipartUpload(req *s3.CompleteMultipartUploadRequest) (resp *s3.CompleteMultipartUploadOutput, err error) {
+	var breakErr error
 	err = c.Retry(func() error {
 		resp, err = c.S3.CompleteMultipartUpload(req)
+		if breakErr = shouldRetry(err); breakErr != nil {
+			return nil
+		}
 		return err
 	})
+	if breakErr != nil { // breakするエラーが発生した
+		err = breakErr
+	}
 	return
 }
 
 func (c *S3) PutObject(req *s3.PutObjectRequest) (resp *s3.PutObjectOutput, err error) {
+	var breakErr error
 	err = c.Retry(func() error {
 		resp, err = c.S3.PutObject(req)
+		if breakErr = shouldRetry(err); breakErr != nil {
+			return nil
+		}
 		return err
 	})
+	if breakErr != nil { // breakするエラーが発生した
+		err = breakErr
+	}
 	return
 }
