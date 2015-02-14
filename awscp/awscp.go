@@ -248,6 +248,7 @@ func (a *AwsS3cp) ParallelPutAll(r *os.File, partSize int64, parallel int) (map[
 		}
 		a.UploadID = resp.UploadID
 	}
+	a.Log.Debug("UploadID:%s", *a.UploadID)
 	listReq := &s3.ListPartsRequest{
 		Bucket:   aws.String(a.Bucket), // aws.StringValue  `xml:"-"`
 		Key:      aws.String(a.S3Path), // aws.StringValue  `xml:"-"`
@@ -264,7 +265,7 @@ func (a *AwsS3cp) ParallelPutAll(r *os.File, partSize int64, parallel int) (map[
 		return nil, err
 	}
 
-	a.Log.Debug("oldpart:", oldpart)
+	a.Log.Debug("oldpart:%# v", oldpart)
 	current := 1 // Part number of latest good part handled.
 	finfo, err := r.Stat()
 	if err != nil {
