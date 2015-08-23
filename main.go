@@ -4,9 +4,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"log"
 	"net/http"
-	"net/http/httputil"
 	"os"
 	"path"
 	"runtime"
@@ -14,10 +12,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/awslabs/aws-sdk-go/aws"
-	"github.com/awslabs/aws-sdk-go/service/s3"
+	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/service/s3"
+	"github.com/masahide/gobackoff"
 	"github.com/masahide/s3cp/awscp"
-	"github.com/masahide/s3cp/backoff"
 	"github.com/masahide/s3cp/file"
 	"github.com/masahide/s3cp/logger"
 	"github.com/masahide/s3cp/pipelines"
@@ -35,16 +33,16 @@ var (
 	logLevel                 = 0
 	jsonLog                  = false
 	showVersion              = false
-	RetryInitialInterval     = 500 //500 * time.Millisecond
-	RetryRandomizationFactor = 0.5 //0.5
-	RetryMultiplier          = 1.5 //1.5
-	RetryMaxInterval         = 60  //60 * time.Second
-	RetryMaxElapsedTime      = 15  //15 * time.Minute
-	Acl                      = "praivate"
+	RetryInitialInterval     = 1000      //500 * time.Millisecond
+	RetryRandomizationFactor = 0.5       //0.5
+	RetryMultiplier          = 1.5       //1.5
+	RetryMaxInterval         = 60        //60 * time.Second
+	RetryMaxElapsedTime      = 15        //15 * time.Minute
+	Acl                      = "private" //
 	version                  string
 	Log                      *logger.Logger
 	S3client                 *s3.S3
-	Backoff                  backoff.Backoff
+	Backoff                  gobackoff.BackOff
 )
 
 type DebugTransport struct {
@@ -52,11 +50,11 @@ type DebugTransport struct {
 }
 
 func (t *DebugTransport) RoundTrip(req *http.Request) (resp *http.Response, err error) {
-	r, _ := httputil.DumpRequestOut(req, true)
+	//r, _ := httputil.DumpRequestOut(req, true)
 	resp, err = t.Transport.RoundTrip(req)
 	//res, _ := httputil.DumpResponse(resp, true)
 	//log.Printf("req:%s\nres:%s\n", r) //, res)
-	log.Printf("\nreq:\n%s\n", r) //, res)
+	//log.Printf("\nreq:\n%s\n", r) //, res)
 	return resp, err
 }
 
@@ -68,7 +66,7 @@ func main() {
 	flag.BoolVar(&checkMD5, "checkmd5", checkMD5, "check md5")
 	flag.BoolVar(&jsonLog, "jsonLog", jsonLog, "JSON output")
 	flag.StringVar(&region, "region", region, "region")
-	flag.StringVar(&Acl, "ACL", Acl, "ACL")
+	flag.StringVar(&Acl, "ACL", Acl, "ACL 'private,public-read,public-read-write,authenticated-read,bucket-owner-full-control,bucket-owner-read")
 	flag.IntVar(&workNum, "n", workNum, "max workers")
 	flag.IntVar(&RetryInitialInterval, "RetryInitialInterval", RetryInitialInterval, "Retry Initial Interval")
 	flag.Float64Var(&RetryRandomizationFactor, "RetryRandomizationFactor", RetryRandomizationFactor, "Retry Randomization Factor")
@@ -101,23 +99,21 @@ func main() {
 		Timeout:   time.Duration(5) * time.Second,
 		Transport: &DebugTransport{http.Transport{MaxIdleConnsPerHost: 32}},
 	}
+	lt := aws.LogLevelType(logLevel)
 	conf := &aws.Config{
-		Region:     region,
+		Region:     &region,
 		HTTPClient: httpClient,
-		LogLevel:   uint(logLevel),
-		MaxRetries: aws.DEFAULT_RETRIES,
+		LogLevel:   &lt,
 	}
 
 	//S3client = s3.New(aws.DetectCreds("", "", ""), region, client)
 	S3client = s3.New(conf)
-	/*
-		Backoff = backoff.NewBackoff()
-		Backoff.InitialInterval = time.Duration(RetryInitialInterval) * time.Millisecond
-		Backoff.RandomizationFactor = RetryRandomizationFactor
-		Backoff.Multiplier = RetryMultiplier
-		Backoff.MaxInterval = time.Duration(RetryMaxInterval) * time.Second
-		Backoff.MaxElapsedTime = time.Duration(RetryMaxElapsedTime) * time.Minute
-	*/
+	Backoff := gobackoff.NewBackOff()
+	Backoff.InitialInterval = time.Duration(RetryInitialInterval) * time.Millisecond
+	Backoff.RandomizationFactor = RetryRandomizationFactor
+	Backoff.Multiplier = RetryMultiplier
+	Backoff.MaxInterval = time.Duration(RetryMaxInterval) * time.Second
+	Backoff.MaxElapsedTime = time.Duration(RetryMaxElapsedTime) * time.Minute
 
 	if jsonLog {
 		Log = logger.NewBufLoogerLevel(logLevel)

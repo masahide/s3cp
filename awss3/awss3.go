@@ -1,13 +1,13 @@
 package awss3
 
 import (
-	"github.com/awslabs/aws-sdk-go/aws"
-	"github.com/awslabs/aws-sdk-go/service/s3"
+	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/service/s3"
 )
 
 var (
 	Delimiter  = aws.String("/")
-	MaxUploads = aws.Long(1000)
+	MaxUploads = aws.Int64(1000)
 )
 
 // S3 struct
@@ -32,7 +32,7 @@ func (c *S3) ListPartsCallBack(req *s3.ListPartsInput, cb func(*s3.Part) error) 
 			return nil
 		}
 		req.PartNumberMarker = l.NextPartNumberMarker
-		req.UploadID = l.UploadID
+		req.UploadId = l.UploadId
 	}
 	return nil
 }
@@ -54,7 +54,7 @@ func (c *S3) ListMultipartUploadsCallBack(req *s3.ListMultipartUploadsInput, cb 
 			return nil
 		}
 		req.KeyMarker = l.NextKeyMarker
-		req.UploadIDMarker = l.NextUploadIDMarker
+		req.UploadIdMarker = l.NextUploadIdMarker
 	}
 	return nil
 }

@@ -9,9 +9,8 @@ import (
 	"io"
 	"os"
 
-	"github.com/awslabs/aws-sdk-go/aws"
-	"github.com/awslabs/aws-sdk-go/service/s3"
-	"github.com/k0kubun/pp"
+	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/service/s3"
 	"github.com/masahide/s3cp/awss3"
 	"github.com/masahide/s3cp/file"
 	"github.com/masahide/s3cp/logger"
@@ -27,7 +26,7 @@ type AwsS3cp struct {
 	CheckSize bool
 	Acl       string
 	Log       *logger.Logger
-	UploadID  *string
+	UploadId  *string
 	client    *awss3.S3
 	file      *os.File
 	fileinfo  os.FileInfo
@@ -36,7 +35,7 @@ type AwsS3cp struct {
 
 type PartListError struct {
 	Err      error
-	UploadID *string
+	UploadId *string
 }
 
 func (l PartListError) Error() string {
@@ -95,7 +94,7 @@ func (a *AwsS3cp) FileUpload() (upload bool, err error) {
 	}
 	if size, _ := file.FileSize(a.FilePath); size > a.PartSize {
 		// multipart upload
-		var parts map[int]s3.CompletedPart
+		var parts []s3.CompletedPart
 		a.Log.Debug("start Multipart Upload:%v", a.FilePath)
 		parts, err = a.S3ParallelMultipartUpload(a.WorkNum)
 		if err != nil {
@@ -177,7 +176,7 @@ func (a *AwsS3cp) Exists(size int64, md5sum string) error {
 		Key:    &a.S3Path, // aws.StringValue  `xml:"-"`
 
 	}
-	pp.Print(req)
+	//pp.Print(req)
 	res, err := a.client.HeadObject(&req)
 	/*
 		if awserr := aws.Error(err); awserr != nil {
@@ -203,7 +202,7 @@ func (a *AwsS3cp) Exists(size int64, md5sum string) error {
 	return nil
 }
 
-func (a *AwsS3cp) ParallelPutAll(r *os.File, partSize int64, parallel int) (map[int]s3.CompletedPart, error) {
+func (a *AwsS3cp) ParallelPutAll(r *os.File, partSize int64, parallel int) ([]s3.CompletedPart, error) {
 	var err error
 	req := &s3.ListMultipartUploadsInput{
 		Bucket:    aws.String(a.Bucket), // aws.StringValue  `xml:"-"`
@@ -212,23 +211,23 @@ func (a *AwsS3cp) ParallelPutAll(r *os.File, partSize int64, parallel int) (map[
 		//MaxUploads: aws.Integer(MaxUploads), // aws.IntegerValue `xml:"-"`
 		//EncodingType   : , // aws.StringValue  `xml:"-"`
 		//KeyMarker      : , // aws.StringValue  `xml:"-"`
-		//UploadIDMarker : , // aws.StringValue  `xml:"-"`
+		//UploadIdMarker : , // aws.StringValue  `xml:"-"`
 	}
 	err = a.client.ListMultipartUploadsCallBack(req, func(multi *s3.MultipartUpload) error {
 		if *multi.Key == a.S3Path {
-			return PartListError{UploadID: multi.UploadID}
+			return PartListError{UploadId: multi.UploadId}
 		}
 		return nil
 	})
 	if err != nil {
 		switch err := err.(type) {
 		case PartListError:
-			a.UploadID = err.UploadID
+			a.UploadId = err.UploadId
 		default:
 			return nil, err
 		}
 	}
-	if a.UploadID == nil {
+	if a.UploadId == nil {
 		req := &s3.CreateMultipartUploadInput{
 			Bucket: aws.String(a.Bucket),
 			Key:    aws.String(a.S3Path),
@@ -237,14 +236,14 @@ func (a *AwsS3cp) ParallelPutAll(r *os.File, partSize int64, parallel int) (map[
 		if err != nil {
 			return nil, err
 		}
-		a.UploadID = resp.UploadID
+		a.UploadId = resp.UploadId
 	}
-	a.Log.Debug("UploadID:%s", *a.UploadID)
+	a.Log.Debug("UploadId:%s", *a.UploadId)
 	listReq := &s3.ListPartsInput{
 		Bucket:   aws.String(a.Bucket), // aws.StringValue  `xml:"-"`
 		Key:      aws.String(a.S3Path), // aws.StringValue  `xml:"-"`
 		MaxParts: awss3.MaxUploads,     // aws.IntegerValue `xml:"-"`
-		UploadID: a.UploadID,           // aws.StringValue  `xml:"-"`
+		UploadId: a.UploadId,           // aws.StringValue  `xml:"-"`
 	}
 
 	oldpart := map[int64]s3.Part{}
@@ -297,8 +296,6 @@ func (a *AwsS3cp) ParallelPutAll(r *os.File, partSize int64, parallel int) (map[
 		}
 	}()
 
-	resultMap := map[int]s3.CompletedPart{}
-
 	go func() {
 		for i := 0; i < parallel; i++ {
 			<-end
@@ -306,11 +303,12 @@ func (a *AwsS3cp) ParallelPutAll(r *os.File, partSize int64, parallel int) (map[
 		close(workResults)
 	}()
 
+	resultMap := []s3.CompletedPart{}
 	for res := range workResults {
 		if res.err != nil {
 			err = errors.New(fmt.Sprintf("%s [part:%d err:%v]", err, res.part.PartNumber, res.err))
 		} else {
-			resultMap[len(resultMap)] = res.part
+			resultMap = append(resultMap, res.part)
 		}
 	}
 
@@ -329,18 +327,18 @@ func (a *AwsS3cp) PutWorker(done chan struct{}, queue <-chan putWork, r chan<- r
 			etag := `"` + md5hex + `"`
 			if w.existOld && *w.oldpart.Size == w.partSize && *w.oldpart.ETag == etag {
 				a.Log.Info("Already upload Part: %v", w.oldpart)
-				res.part = s3.CompletedPart{ETag: aws.String(etag), PartNumber: aws.Long(w.current)}
+				res.part = s3.CompletedPart{ETag: aws.String(etag), PartNumber: aws.Int64(w.current)}
 			} else {
 				// Part wasn't found or doesn't match. Send it.
 				a.Log.Info("Start upload Part section Num:%d", w.current)
 				req := s3.UploadPartInput{
 					Body:          w.section,            // io.ReadCloser    `xml:"-"`
 					Bucket:        aws.String(a.Bucket), // aws.StringValue  `xml:"-"`
-					ContentLength: aws.Long(size),       // aws.LongValue    `xml:"-"`
+					ContentLength: aws.Int64(size),      // aws.LongValue    `xml:"-"`
 					//ContentMD5:    aws.String(md5b64),     // aws.StringValue  `xml:"-"`
 					Key:        aws.String(a.S3Path), // aws.StringValue  `xml:"-"`
-					PartNumber: aws.Long(w.current),  // aws.IntegerValue `xml:"-"`
-					UploadID:   a.UploadID,           // aws.StringValue  `xml:"-"`
+					PartNumber: aws.Int64(w.current), // aws.IntegerValue `xml:"-"`
+					UploadId:   a.UploadId,           // aws.StringValue  `xml:"-"`
 				}
 				resp, err := a.client.UploadPart(&req)
 				res.err = err
@@ -384,7 +382,7 @@ func seekerInfo(r io.ReadSeeker) (size int64, md5hex string, md5b64 string, err 
 	return size, md5hex, md5b64, nil
 }
 
-func (a *AwsS3cp) S3ParallelMultipartUpload(parallel int) (map[int]s3.CompletedPart, error) {
+func (a *AwsS3cp) S3ParallelMultipartUpload(parallel int) ([]s3.CompletedPart, error) {
 	var err error
 	//bucket := a.client.Bucket(a.Bucket)
 	a.file, err = os.Open(a.FilePath)
@@ -398,12 +396,12 @@ func (a *AwsS3cp) S3ParallelMultipartUpload(parallel int) (map[int]s3.CompletedP
 	a.Log.Debug("uploaded all Parts. len(parts)=%v", len(parts))
 
 	partsArray := make([]*s3.CompletedPart, len(parts))
-	for _, p := range parts {
+	for i, p := range parts {
 		if *p.PartNumber > int64(len(partsArray)) || *p.PartNumber <= 0 {
 			a.Log.Debug("Err: [part Number > len(parts) or <=0] parts: %v", parts)
 			return nil, errors.New("part Number > len(parts) or <=0")
 		}
-		partsArray[*p.PartNumber-1] = &p
+		partsArray[*p.PartNumber-1] = &parts[i]
 	}
 
 	a.Log.Debug("Start  multi.complate.  len(PartsArray)=%v", len(partsArray))
@@ -412,15 +410,15 @@ func (a *AwsS3cp) S3ParallelMultipartUpload(parallel int) (map[int]s3.CompletedP
 	req := s3.CompleteMultipartUploadInput{
 		Bucket:   aws.String(a.Bucket), // aws.StringValue  `xml:"-"`
 		Key:      aws.String(a.S3Path), // aws.StringValue  `xml:"-"`
-		UploadID: a.UploadID,           // aws.StringValue  `xml:"-"`
+		UploadId: a.UploadId,           // aws.StringValue  `xml:"-"`
 		MultipartUpload: &s3.CompletedMultipartUpload{
 			Parts: partsArray,
 		}, // *CompletedMultipartUpload `xml:"CompleteMultipartUpload,omitempty"`
 	}
 	_, err = a.client.CompleteMultipartUpload(&req)
-	pp.Print(req)
+	//pp.Print(req)
 	if err != nil {
-		a.Log.Error("complate err: %# v", err)
+		a.Log.Error("complete err: %# v", err)
 		return nil, err
 	}
 	return parts, err
@@ -428,12 +426,12 @@ func (a *AwsS3cp) S3ParallelMultipartUpload(parallel int) (map[int]s3.CompletedP
 
 func (a *AwsS3cp) S3Upload(size int64) error {
 	req := s3.PutObjectInput{
-		ACL:           aws.String(a.Acl),      // aws.StringValue   `xml:"-"`
-		Body:          a.file,                 // io.ReadCloser     `xml:"-"`
 		Bucket:        aws.String(a.Bucket),   // aws.StringValue   `xml:"-"`
+		Key:           aws.String(a.S3Path),   // aws.StringValue   `xml:"-"`
+		ACL:           aws.String(a.Acl),      // aws.StringValue   `xml:"-"`
 		ContentLength: &size,                  // aws.LongValue     `xml:"-"`
 		ContentType:   aws.String(a.MimeType), // aws.StringValue   `xml:"-"`
-		Key:           aws.String(a.S3Path),   // aws.StringValue   `xml:"-"`
+		Body:          a.file,                 // io.ReadCloser     `xml:"-"`
 	}
 	//key := fmt.Sprintf( "%s%s", a.S3Path, path.Base(a.FilePath),)
 	_, err := a.client.PutObject(&req)
