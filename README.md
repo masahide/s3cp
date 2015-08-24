@@ -18,10 +18,9 @@ https://drone.io/github.com/masahide/s3cp/files
 注意
 ----
 
-* 現状ACLは固定ですべてprivateになります
 * S3からのダウンロード機能は未実装です
 * シンボリックリンクは追跡します(循環参照無限ループを回避するため、symlinkは20階層でストップします)
-* Windowsはまだ未対応
+* Windows未対応
 
 
 
@@ -100,6 +99,8 @@ $ s3cp -r /var/tmp/piyo test-bucket html/fuge
    * 対象リージョンの指定
  *  -jsonLog
    * 出力形式をjsonに
+ * -ACL
+   * ACLを指定します。 default:private  (public-read,public-read-write,authenticated-read,bucket-owner-full-control,bucket-owner-read)
  *  -version
    * versionの表示
  *  -d=0: log level
