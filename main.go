@@ -172,7 +172,7 @@ func main() {
 			CheckSize: checkSize,
 			CheckMD5:  checkMD5,
 			WorkNum:   workNum,
-			Log:       logger.NewLooger(),
+			Log:       Log,
 			FilePath:  cpPath,
 		}
 		if strings.HasSuffix(destPath, "/") {

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/s3"
@@ -204,6 +205,7 @@ func (a *AwsS3cp) Exists(size int64, md5sum string) error {
 
 func (a *AwsS3cp) ParallelPutAll(r *os.File, partSize int64, parallel int) ([]s3.CompletedPart, error) {
 	var err error
+	a.S3Path = strings.TrimLeft(a.S3Path, "/")
 	req := &s3.ListMultipartUploadsInput{
 		Bucket:    aws.String(a.Bucket), // aws.StringValue  `xml:"-"`
 		Prefix:    aws.String(a.S3Path), // aws.StringValue  `xml:"-"`
@@ -227,7 +229,9 @@ func (a *AwsS3cp) ParallelPutAll(r *os.File, partSize int64, parallel int) ([]s3
 			return nil, err
 		}
 	}
-	if a.UploadId == nil {
+	if a.UploadId != nil {
+		a.Log.Debug("old UploadId:%s", *a.UploadId)
+	} else {
 		req := &s3.CreateMultipartUploadInput{
 			Bucket: aws.String(a.Bucket),
 			Key:    aws.String(a.S3Path),
@@ -237,8 +241,9 @@ func (a *AwsS3cp) ParallelPutAll(r *os.File, partSize int64, parallel int) ([]s3
 			return nil, err
 		}
 		a.UploadId = resp.UploadId
+		a.Log.Debug("Create UploadId:%s", *a.UploadId)
 	}
-	a.Log.Debug("UploadId:%s", *a.UploadId)
+	a.Log.Debug("S3Path = %s", a.S3Path)
 	listReq := &s3.ListPartsInput{
 		Bucket:   aws.String(a.Bucket), // aws.StringValue  `xml:"-"`
 		Key:      aws.String(a.S3Path), // aws.StringValue  `xml:"-"`
@@ -246,16 +251,16 @@ func (a *AwsS3cp) ParallelPutAll(r *os.File, partSize int64, parallel int) ([]s3
 		UploadId: a.UploadId,           // aws.StringValue  `xml:"-"`
 	}
 
-	oldpart := map[int64]s3.Part{}
+	oldparts := map[int64]s3.Part{}
 	err = a.client.ListPartsCallBack(listReq, func(part *s3.Part) error {
-		oldpart[int64(len(oldpart))] = *part
+		oldparts[*part.PartNumber] = *part
 		return nil
 	})
 	if err != nil {
 		return nil, err
 	}
 
-	a.Log.Debug("oldpart:%# v", oldpart)
+	a.Log.Debug("oldparts:%# v", oldparts)
 	current := int64(1) // Part number of latest good part handled.
 	finfo, err := r.Stat()
 	if err != nil {
@@ -286,7 +291,7 @@ func (a *AwsS3cp) ParallelPutAll(r *os.File, partSize int64, parallel int) ([]s3
 				partSize = totalSize - offset
 			}
 			section := SectionReader{io.NewSectionReader(r, offset, partSize)}
-			oldpart, ok := oldpart[current]
+			oldpart, ok := oldparts[current]
 			select {
 			case queue <- putWork{section, ok, oldpart, partSize, current}:
 			case <-done:
