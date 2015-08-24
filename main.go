@@ -4,6 +4,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"net/http"
 	"os"
 	"path"
 	"runtime"
@@ -11,8 +12,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/cenkalti/backoff"
-	"github.com/masahide/s3cp/aws"
+	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/service/s3"
+	"github.com/masahide/gobackoff"
+	"github.com/masahide/s3cp/awscp"
 	"github.com/masahide/s3cp/file"
 	"github.com/masahide/s3cp/logger"
 	"github.com/masahide/s3cp/pipelines"
@@ -30,15 +33,30 @@ var (
 	logLevel                 = 0
 	jsonLog                  = false
 	showVersion              = false
-	RetryInitialInterval     = 500 //500 * time.Millisecond
-	RetryRandomizationFactor = 0.5 //0.5
-	RetryMultiplier          = 1.5 //1.5
-	RetryMaxInterval         = 60  //60 * time.Second
-	RetryMaxElapsedTime      = 15  //15 * time.Minute
+	RetryInitialInterval     = 1000      //500 * time.Millisecond
+	RetryRandomizationFactor = 0.5       //0.5
+	RetryMultiplier          = 1.5       //1.5
+	RetryMaxInterval         = 60        //60 * time.Second
+	RetryMaxElapsedTime      = 15        //15 * time.Minute
+	Acl                      = "private" //
 	version                  string
-	BackoffParam             *backoff.ExponentialBackOff
 	Log                      *logger.Logger
+	S3client                 *s3.S3
+	Backoff                  gobackoff.BackOff
 )
+
+type DebugTransport struct {
+	http.Transport
+}
+
+func (t *DebugTransport) RoundTrip(req *http.Request) (resp *http.Response, err error) {
+	//r, _ := httputil.DumpRequestOut(req, true)
+	resp, err = t.Transport.RoundTrip(req)
+	//res, _ := httputil.DumpResponse(resp, true)
+	//log.Printf("req:%s\nres:%s\n", r) //, res)
+	//log.Printf("\nreq:\n%s\n", r) //, res)
+	return resp, err
+}
 
 func main() {
 	// Parse the command-line flags.
@@ -48,6 +66,7 @@ func main() {
 	flag.BoolVar(&checkMD5, "checkmd5", checkMD5, "check md5")
 	flag.BoolVar(&jsonLog, "jsonLog", jsonLog, "JSON output")
 	flag.StringVar(&region, "region", region, "region")
+	flag.StringVar(&Acl, "ACL", Acl, "ACL 'private,public-read,public-read-write,authenticated-read,bucket-owner-full-control,bucket-owner-read")
 	flag.IntVar(&workNum, "n", workNum, "max workers")
 	flag.IntVar(&RetryInitialInterval, "RetryInitialInterval", RetryInitialInterval, "Retry Initial Interval")
 	flag.Float64Var(&RetryRandomizationFactor, "RetryRandomizationFactor", RetryRandomizationFactor, "Retry Randomization Factor")
@@ -76,12 +95,25 @@ func main() {
 	bucket = flag.Args()[1]
 	destPath = flag.Args()[2]
 
-	BackoffParam = backoff.NewExponentialBackOff()
-	BackoffParam.InitialInterval = time.Duration(RetryInitialInterval) * time.Millisecond
-	BackoffParam.RandomizationFactor = RetryRandomizationFactor
-	BackoffParam.Multiplier = RetryMultiplier
-	BackoffParam.MaxInterval = time.Duration(RetryMaxInterval) * time.Second
-	BackoffParam.MaxElapsedTime = time.Duration(RetryMaxElapsedTime) * time.Minute
+	httpClient := &http.Client{
+		Timeout:   time.Duration(5) * time.Second,
+		Transport: &DebugTransport{http.Transport{MaxIdleConnsPerHost: 32}},
+	}
+	lt := aws.LogLevelType(logLevel)
+	conf := &aws.Config{
+		Region:     &region,
+		HTTPClient: httpClient,
+		LogLevel:   &lt,
+	}
+
+	//S3client = s3.New(aws.DetectCreds("", "", ""), region, client)
+	S3client = s3.New(conf)
+	Backoff := gobackoff.NewBackOff()
+	Backoff.InitialInterval = time.Duration(RetryInitialInterval) * time.Millisecond
+	Backoff.RandomizationFactor = RetryRandomizationFactor
+	Backoff.Multiplier = RetryMultiplier
+	Backoff.MaxInterval = time.Duration(RetryMaxInterval) * time.Second
+	Backoff.MaxElapsedTime = time.Duration(RetryMaxElapsedTime) * time.Minute
 
 	if jsonLog {
 		Log = logger.NewBufLoogerLevel(logLevel)
@@ -131,32 +163,30 @@ func main() {
 			Log.Error("Error: %v", err)
 		}
 	} else {
-		s3cp := aws.NewS3cp()
-		s3cp.Log = Log
-		s3cp.BackoffParam = BackoffParam
-		s3cp.Region = region
-		s3cp.Bucket = bucket
-		s3cp.S3Path = destPath
-		s3cp.CheckSize = checkSize
-		//s3cp.CheckMD5 = checkMD5
-		s3cp.WorkNum = workNum
+		s3cp := awscp.AwsS3cp{
+			Bucket:    bucket,
+			S3Path:    destPath,
+			Acl:       Acl,
+			MimeType:  "application/octet-stream",
+			PartSize:  20 * 1024 * 1024,
+			CheckSize: checkSize,
+			CheckMD5:  checkMD5,
+			WorkNum:   workNum,
+			Log:       Log,
+			FilePath:  cpPath,
+		}
 		if strings.HasSuffix(destPath, "/") {
 			s3cp.S3Path = destPath + path.Base(cpPath)
 		}
-		s3cp.FilePath = cpPath
-		err = s3cp.Auth()
+		s3cp.SetS3client(S3client)
+		var upload bool
+		upload, err = s3cp.FileUpload()
 		if err != nil {
-			Log.Error("%v", err)
+			Log.Error("FileUpload err:%v", err)
+		} else if !upload {
+			Log.Info("Same file: %s", destPath)
 		} else {
-			var upload bool
-			upload, err = s3cp.FileUpload()
-			if err != nil {
-				Log.Error("FileUpload err:%v", err)
-			} else if !upload {
-				Log.Info("Same file: %s", destPath)
-			} else {
-				Log.Info("Uploaded.")
-			}
+			Log.Info("Uploaded.")
 		}
 	}
 	returnCode := 0
@@ -232,17 +262,18 @@ func (t s3cpTask) Work() pipelines.TaskResult {
 	//log.Printf("t.path:%s", t.path)
 	result := s3cpResult{task: t}
 
-	s3cp := aws.NewS3cp()
-	s3cp.BackoffParam = BackoffParam
-	s3cp.Bucket = bucket
-	s3cp.Region = region
-	s3cp.FilePath = t.path
-	s3cp.Log = Log
-	s3cp.S3Path = to
-	s3cp.CheckSize = checkSize
-	s3cp.CheckMD5 = checkMD5
-	s3cp.WorkNum = workNum
-	s3cp.Auth()
+	s3cp := awscp.AwsS3cp{
+		Bucket:    bucket,
+		S3Path:    to,
+		MimeType:  "application/octet-stream",
+		PartSize:  20 * 1024 * 1024,
+		CheckSize: checkSize,
+		CheckMD5:  checkMD5,
+		WorkNum:   workNum,
+		Log:       Log,
+		FilePath:  t.path,
+	}
+	s3cp.SetS3client(S3client)
 	result.to = to
 	result.upload, result.err = s3cp.FileUpload()
 
