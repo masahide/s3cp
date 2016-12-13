@@ -4,6 +4,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"path"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/s3"
 	"github.com/masahide/gobackoff"
 	"github.com/masahide/s3cp/awscp"
@@ -100,6 +102,11 @@ func main() {
 		Transport: &DebugTransport{http.Transport{MaxIdleConnsPerHost: 32}},
 	}
 	lt := aws.LogLevelType(logLevel)
+	sess, err := session.NewSession()
+	if err != nil {
+		log.Println(err)
+		os.Exit(1)
+	}
 	conf := &aws.Config{
 		Region:     &region,
 		HTTPClient: httpClient,
@@ -107,7 +114,7 @@ func main() {
 	}
 
 	//S3client = s3.New(aws.DetectCreds("", "", ""), region, client)
-	S3client = s3.New(conf)
+	S3client = s3.New(sess, conf)
 	Backoff := gobackoff.NewBackOff()
 	Backoff.InitialInterval = time.Duration(RetryInitialInterval) * time.Millisecond
 	Backoff.RandomizationFactor = RetryRandomizationFactor
@@ -125,7 +132,6 @@ func main() {
 	cpus := runtime.NumCPU()
 	runtime.GOMAXPROCS(cpus)
 
-	var err error
 	if dirCopy {
 		cpPath = strings.TrimSuffix(cpPath, `/`)
 		destPath = strings.TrimSuffix(destPath, `/`)

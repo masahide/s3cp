@@ -1,6 +1,7 @@
 package awscp
 
 import (
+	"bytes"
 	"crypto/md5"
 	"encoding/base64"
 	"encoding/hex"
@@ -120,13 +121,16 @@ func (a *AwsS3cp) CompareFile() error {
 		size = 0
 	}
 	if a.CheckMD5 {
-		md5sum, err = file.Md5sum(a.file)
+		if size > a.PartSize {
+			md5sum, err = MultipartEtag(a.file, a.PartSize)
+		} else {
+			md5sum, err = file.Md5sum(a.file)
+		}
 		if err != nil {
 			return err
 		}
 	}
 	return a.Exists(size, md5sum)
-
 }
 
 type S3NotExistsError struct {
@@ -444,4 +448,53 @@ func (a *AwsS3cp) S3Upload(size int64) error {
 		a.Log.Warning("PutObject err:%v", err)
 	}
 	return err
+}
+
+/*
+func (a *AwsS3cp) getfileSize(req *s3.PutObjectInput) (int64, error) {
+	r := req.Body.(io.Seeker)
+	pos, _ := r.Seek(0, 1)
+	defer r.Seek(pos, 0)
+
+	return r.Seek(0, 2)
+}
+
+func (a *AwsS3cp) shouldSinglepartUpload(req *s3.PutObjectInput) (bool, error) {
+	fileSize, err := a.getfileSize(req)
+	if err != nil {
+		return false, err
+	}
+
+	return fileSize < a.PartSize, nil
+}
+*/
+
+func MultipartEtag(r io.ReadSeeker, partsize int64) (string, error) {
+	pos, _ := r.Seek(0, 1)
+	defer r.Seek(pos, 0)
+	md5Buf := &bytes.Buffer{}
+	var i int
+	var breakFlg bool
+	for {
+		h := md5.New()
+		_, err := io.CopyN(h, r, partsize)
+		i++
+		if err != nil {
+			if err != io.EOF {
+				return "", err
+			}
+			breakFlg = true
+		}
+		if _, err := md5Buf.Write(h.Sum(nil)); err != nil {
+			return "", err
+		}
+		if breakFlg {
+			break
+		}
+	}
+	h := md5.New()
+	if _, err := io.Copy(h, md5Buf); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%s-%d", hex.EncodeToString(h.Sum(nil)), i), nil
 }
